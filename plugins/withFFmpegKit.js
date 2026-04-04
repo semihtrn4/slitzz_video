@@ -13,8 +13,9 @@ const AAR_URL = 'https://github.com/NooruddinLakhani/ffmpeg-kit-full-gpl/release
 
 const downloadFile = (url, dest) => {
   return new Promise((resolve, reject) => {
-    if (fs.existsSync(dest)) {
-      console.log(`[withFFmpegKit] ${path.basename(dest)} already exists.`);
+    // Only download if doesn't exist or is empty
+    if (fs.existsSync(dest) && fs.statSync(dest).size > 0) {
+      console.log(`[withFFmpegKit] ${path.basename(dest)} already exists and is not empty.`);
       return resolve();
     }
     
@@ -22,23 +23,48 @@ const downloadFile = (url, dest) => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     console.log(`[withFFmpegKit] Downloading AAR from ${url}...`);
-    const file = fs.createWriteStream(dest);
-    https.get(url, (response) => {
-      if (response.statusCode === 302 || response.statusCode === 301) {
-        // Handle redirect
-        downloadFile(response.headers.location, dest).then(resolve).catch(reject);
-        return;
-      }
-      response.pipe(file);
-      file.on('finish', () => {
-        file.close();
-        console.log('[withFFmpegKit] Download complete.');
-        resolve();
+    
+    const request = (targetUrl) => {
+      const protocol = targetUrl.startsWith('https') ? https : require('http');
+      protocol.get(targetUrl, (response) => {
+        const { statusCode } = response;
+        
+        // Handle Redirects
+        if ([301, 302, 303, 307, 308].includes(statusCode)) {
+          const redirectUrl = response.headers.location;
+          console.log(`[withFFmpegKit] Redirecting to ${redirectUrl}...`);
+          return request(new URL(redirectUrl, targetUrl).toString());
+        }
+
+        if (statusCode !== 200) {
+          return reject(new Error(`Failed to download: Status Code ${statusCode}`));
+        }
+
+        const file = fs.createWriteStream(dest);
+        response.pipe(file);
+        
+        file.on('finish', () => {
+          file.close();
+          const size = fs.statSync(dest).size;
+          if (size === 0) {
+            fs.unlinkSync(dest);
+            return reject(new Error('Downloaded file is empty (0 bytes).'));
+          }
+          console.log(`[withFFmpegKit] Download complete (${size} bytes).`);
+          resolve();
+        });
+
+        file.on('error', (err) => {
+          fs.unlink(dest, () => {});
+          reject(err);
+        });
+      }).on('error', (err) => {
+        if (fs.existsSync(dest)) fs.unlinkSync(dest);
+        reject(err);
       });
-    }).on('error', (err) => {
-      fs.unlink(dest, () => {});
-      reject(err);
-    });
+    };
+
+    request(url);
   });
 };
 

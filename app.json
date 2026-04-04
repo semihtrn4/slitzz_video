@@ -18,7 +18,7 @@
       "bundleIdentifier": "app.rork.v1mtw13psu2nv6ka9q9kx",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Videolarınızı kamera rulosuna kaydetmek için",
-        "NSMicrophoneUsageDescription": "Video kaydı için mikrofon erişimi",
+        "NSMicrophoneUsageDescription": "Sesinizi yazıya dökmek ve transkripsiyon için mikrofon erişimi gereklidir.",
         "NSCameraUsageDescription": "Video çekimi için kamera erişimi"
       }
     },

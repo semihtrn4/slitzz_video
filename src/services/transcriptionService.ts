@@ -1,9 +1,10 @@
-﻿import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 import type { SubtitleSegment, WordTimestamp } from '../types';
 
 const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin';
-const MODEL_PATH = FileSystem.documentDirectory + 'models/ggml-tiny.bin';
-const MODEL_DIR = FileSystem.documentDirectory + 'models/';
+const FS = FileSystem as any;
+const MODEL_PATH = (FS.documentDirectory || '') + 'models/ggml-tiny.bin';
+const MODEL_DIR = (FS.documentDirectory || '') + 'models/';
 
 export class TranscriptionService {
   private static instance: TranscriptionService;
@@ -39,16 +40,16 @@ export class TranscriptionService {
       }
     );
     const result = await downloadResumable.downloadAsync();
-    if (!result) {
+    if (!result || !result.uri) {
       throw new Error('[Whisper] Download failed: no result returned');
     }
     const info = await FileSystem.getInfoAsync(MODEL_PATH);
-    if (!info.exists) {
+    if (!info.exists || info.size < 1000000) { // Tiny model en az 30MB civarı, 1MB altı mutlaka hatalıdır
       await FileSystem.deleteAsync(MODEL_PATH, { idempotent: true });
-      throw new Error('[Whisper] Download verification failed: file not found after download');
+      throw new Error('[Whisper] Download verification failed: file is corrupt or too small');
     }
     this.modelPath = MODEL_PATH;
-    console.log('[Whisper] Model downloaded to:', MODEL_PATH);
+    console.log('[Whisper] Model downloaded and verified:', MODEL_PATH);
     return MODEL_PATH;
   }
 
@@ -133,7 +134,7 @@ export class TranscriptionService {
 
   // Generate SRT file from segments (Requirements: 6.4, 6.5)
   async generateSRT(segments: SubtitleSegment[]): Promise<string> {
-    const tempDir = FileSystem.cacheDirectory + 'temp/';
+    const tempDir = (FileSystem as any).cacheDirectory + 'temp/';
     const tempDirInfo = await FileSystem.getInfoAsync(tempDir);
     if (!tempDirInfo.exists) {
       await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true });
