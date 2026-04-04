@@ -6,7 +6,10 @@
     "start": "bunx rork start -p v1mtw13psu2nv6ka9q9kx --tunnel",
     "start-web": "bunx rork start -p v1mtw13psu2nv6ka9q9kx --web --tunnel",
     "start-web-dev": "DEBUG=expo* bunx rork start -p v1mtw13psu2nv6ka9q9kx --web --tunnel",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "postinstall": "node scripts/patch-ffmpeg.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -21,6 +24,7 @@
     "expo": "~54.0.27",
     "expo-av": "~16.0.8",
     "expo-blur": "~15.0.8",
+    "expo-build-properties": "~1.0.10",
     "expo-constants": "~18.0.11",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.21",
@@ -40,7 +44,6 @@
     "expo-symbols": "~1.0.8",
     "expo-system-ui": "~6.0.9",
     "expo-web-browser": "~15.0.10",
-    "ffmpeg-kit-react-native": "^6.0.2",
     "lottie-react-native": "~7.3.1",
     "lucide-react-native": "^0.475.0",
     "nativewind": "^4.2.3",
@@ -69,6 +72,7 @@
     "eslint-config-expo": "~10.0.0",
     "fast-check": "^4.6.0",
     "jest": "^30.3.0",
+    "patch-package": "^8.0.1",
     "ts-jest": "^29.4.9",
     "typescript": "~5.9.2"
   },
