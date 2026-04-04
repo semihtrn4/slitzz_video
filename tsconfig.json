@@ -1,0 +1,31 @@
+{
+  "extends": "expo/tsconfig.base.json",
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "react-native",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@/*": [
+        "./*"
+      ],
+      "@tanstack/react-query": [
+        "./node_modules/@tanstack/react-query/build/modern/index.d.ts"
+      ],
+      "expo-blur": [
+        "./node_modules/expo-blur/build/index.d.ts"
+      ],
+      "expo-file-system": [
+        "./node_modules/expo-file-system/build/index.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
