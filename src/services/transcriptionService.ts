@@ -68,38 +68,37 @@ export class TranscriptionService {
 
     onProgress?.('Initializing model...');
 
-    // Lazy import — whisper.rn requires native modules (not available in Expo Go)
-    type InitWhisperFn = (options: { filePath: string }) => Promise<{
-      transcribe: (path: string, options: { language: string; onProgress?: (p: number) => void }) => {
-        promise: Promise<{
-          segments: Array<{ t0: number; t1: number; text: string; words?: Array<{ word: string; t0: number; t1: number }> }>;
-        }>;
-      };
-    }>;
-    let initWhisper: InitWhisperFn;
+    // Native Whisper requires native modules (not available in Expo Go)
+    let whisper: any;
     try {
-      const mod = await import('whisper.rn' as string);
-      initWhisper = mod.initWhisper;
+      whisper = require('whisper.rn');
     } catch {
       throw new Error('[Whisper] whisper.rn native module not available. Run npx expo prebuild and use a physical device.');
     }
 
-    let ctx: Awaited<ReturnType<InitWhisperFn>>;
+    onProgress?.('Initializing model...');
+    let ctx: any;
     try {
-      ctx = await initWhisper({ filePath: this.modelPath });
+      ctx = await whisper.initWhisper({ filePath: this.modelPath });
+      console.log('[Whisper] Model initialized successfully');
     } catch (err) {
+      console.error('[Whisper] Initialization error:', err);
       throw new Error(`[Whisper] Failed to initialize model: ${err}`);
     }
 
     onProgress?.('Transcribing audio...');
 
-    // ctx.transcribe returns { stop, promise }  we await the promise
+    // ctx.transcribe returns { stop, promise }
     const { promise } = ctx.transcribe(audioPath, {
       language,
-      onProgress: (p: number) => onProgress?.(`Transcribing... ${p}%`),
+      onProgress: (p: number) => {
+        console.log(`[Whisper] Progress: ${p}%`);
+        onProgress?.(`Transcribing... ${p}%`);
+      },
     });
 
     const transcribeResult = await promise;
+    console.log('[Whisper] Transcription complete. Segments:', transcribeResult.segments.length);
 
     onProgress?.('Complete');
 

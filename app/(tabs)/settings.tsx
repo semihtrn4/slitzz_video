@@ -46,7 +46,8 @@ const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.blitzc
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { isPremium, togglePremium } = useSubscriptionStore();
+  const { isPremium, togglePremium, debugProMode, toggleDebugProMode, isUserPremium } = useSubscriptionStore();
+  const hasPremium = isUserPremium();
   const { hapticEnabled, setHapticEnabled, autoDownloadModel, setAutoDownloadModel, defaultResolution, setDefaultResolution, defaultAspectRatio, setDefaultAspectRatio } = useSettingsStore();
 
   const [storageUsed, setStorageUsed] = useState(124);
@@ -129,11 +130,11 @@ export default function SettingsScreen() {
             <View style={[styles.planBadge, isPremium && styles.planBadgePremium]}>
               <Crown size={12} color={isPremium ? '#FFFFFF' : primary} />
               <Text style={[styles.planText, isPremium && styles.planTextPremium]}>
-                {isPremium ? 'Premium' : 'Free Plan'}
+                {hasPremium ? 'Premium' : 'Free Plan'}
               </Text>
             </View>
           </View>
-          {!isPremium && (
+          {!hasPremium && (
             <TouchableOpacity style={styles.upgradeButton} onPress={handleUpgrade}>
               <Text style={styles.upgradeButtonText}>Upgrade</Text>
             </TouchableOpacity>
@@ -156,10 +157,10 @@ export default function SettingsScreen() {
                   style={[
                     styles.pickerItem,
                     defaultResolution === res.value && styles.pickerItemActive,
-                    res.premium && !isPremium && styles.pickerItemLocked,
+                    res.premium && !hasPremium && styles.pickerItemLocked,
                   ]}
                   onPress={() => {
-                    if (res.premium && !isPremium) {
+                    if (res.premium && !hasPremium) {
                       handleUpgrade();
                     } else {
                       setDefaultResolution(res.value);
@@ -170,12 +171,12 @@ export default function SettingsScreen() {
                     style={[
                       styles.pickerItemText,
                       defaultResolution === res.value && styles.pickerItemTextActive,
-                      res.premium && !isPremium && styles.pickerItemTextLocked,
+                      res.premium && !hasPremium && styles.pickerItemTextLocked,
                     ]}
                   >
                     {res.label}
                   </Text>
-                  {res.premium && !isPremium && (
+                  {res.premium && !hasPremium && (
                     <Crown size={12} color={textSecondary} />
                   )}
                 </TouchableOpacity>
@@ -347,15 +348,30 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
-      {/* Debug: Toggle Premium (for testing) */}
-      <View style={styles.section}>
-        <TouchableOpacity style={styles.debugRow} onPress={togglePremium}>
-          <LogOut size={20} color={textSecondary} />
-          <Text style={styles.debugText}>
-            {isPremium ? 'Switch to Free Plan (Debug)' : 'Enable Premium (Debug)'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      {/* // DEBUG_ONLY_START */}
+      <Animated.View entering={FadeIn.delay(700)} style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: danger }]}>Geliştirici Ayarları (Test)</Text>
+        <View style={[styles.card, { borderColor: danger }]}>
+          <View style={styles.switchRow}>
+            <View style={styles.switchRowLeft}>
+              <Sparkles size={20} color={danger} />
+              <View>
+                <Text style={[styles.rowLabel, { color: danger, fontWeight: 'bold' }]}>Pro Özellikleri Test Et</Text>
+                <Text style={{ fontSize: 11, color: textSecondary }}>
+                  Bu buton aktifken tüm kilitler kalkar.
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={debugProMode}
+              onValueChange={toggleDebugProMode}
+              trackColor={{ false: border, true: `${danger}50` }}
+              thumbColor={debugProMode ? danger : textSecondary}
+            />
+          </View>
+        </View>
+      </Animated.View>
+      {/* // DEBUG_ONLY_END */}
 
       <View style={styles.versionContainer}>
         <Text style={styles.versionText}>Versiyon: {appVersion}</Text>

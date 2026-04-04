@@ -1,9 +1,7 @@
-import * as FileSystem from 'expo-file-system/legacy';
+import { FFmpegKit, ReturnCode, FFmpegKitConfig } from 'ffmpeg-kit-react-native';
+import * as FileSystem from 'expo-file-system';
 import { silenceService } from './silenceService';
 import type { SilenceSegment, TimeSegment, SubtitleStyle, ExportConfig } from '../types';
-
-// ffmpeg-kit-react-native was retired in January 2025 and removed from Maven.
-// All FFmpeg operations are mocked. Real implementation requires a custom native module.
 
 export class FFmpegService {
   private static instance: FFmpegService;
@@ -11,97 +9,170 @@ export class FFmpegService {
   static getInstance(): FFmpegService {
     if (!FFmpegService.instance) {
       FFmpegService.instance = new FFmpegService();
+      // Setup logging for debugging
+      FFmpegKitConfig.enableLogCallback((log) => {
+        console.log(`[FFmpeg Log] ${log.getMessage()}`);
+      });
     }
     return FFmpegService.instance;
   }
 
+  /**
+   * Extracts audio stream from video for processing (Whisper/Silence Detection)
+   */
   async extractAudio(videoPath: string): Promise<string> {
-    console.log('[FFmpeg] extractAudio (mock):', videoPath);
-    // Return the video path itself — Whisper can handle video files directly in some implementations
-    return videoPath;
+    const audioPath = `${(FileSystem as any).cacheDirectory}extracted_audio_${Date.now()}.m4a`;
+    console.log('[FFmpeg] Extracting audio to:', audioPath);
+
+    // -vn: no video, -acodec copy: copy audio stream without re-encoding
+    const session = await FFmpegKit.execute(`-i "${videoPath}" -vn -acodec copy -y "${audioPath}"`);
+    const returnCode = await session.getReturnCode();
+
+    if (ReturnCode.isSuccess(returnCode)) {
+      return audioPath;
+    } else {
+      const logs = await session.getLogs();
+      throw new Error(`FFmpeg audio extraction failed: ${logs[logs.length - 1]?.getMessage()}`);
+    }
   }
 
+  /**
+   * Detects silences in an audio file using FFmpeg silencedetect filter
+   */
   async detectSilences(
-    _audioPath: string,
-    _threshold: number,
-    _minDuration: number
+    audioPath: string,
+    threshold: number = -30,
+    minDuration: number = 0.5
   ): Promise<SilenceSegment[]> {
-    console.log('[FFmpeg] detectSilences (mock)');
-    // Return empty array — no silences detected in mock mode
-    return [];
+    console.log('[FFmpeg] Detecting silences...');
+    
+    // -af silencedetect: audio filter for silence detection
+    // -f null -: output to null (we only need the stderr logs)
+    const session = await FFmpegKit.execute(
+      `-i "${audioPath}" -af silencedetect=n=${threshold}dB:d=${minDuration} -f null -`
+    );
+    
+    const output = await session.getOutput();
+    const returnCode = await session.getReturnCode();
+
+    if (ReturnCode.isSuccess(returnCode)) {
+      return silenceService.parseSilenceOutput(output);
+    } else {
+      throw new Error('FFmpeg silence detection failed');
+    }
   }
 
+  /**
+   * Removes silent segments from video by creating a concat filter
+   */
   async removeSilences(
     videoPath: string,
-    _keepSegments: TimeSegment[],
-    _padding: number
+    keepSegments: TimeSegment[],
+    padding: number = 100
   ): Promise<string> {
-    console.log('[FFmpeg] removeSilences (mock)');
-    return videoPath;
+    if (keepSegments.length === 0) return videoPath;
+
+    const outputPath = `${(FileSystem as any).cacheDirectory}cut_${Date.now()}.mp4`;
+    console.log('[FFmpeg] Removing silences, generating:', outputPath);
+
+    // Building complex filter for trimming and concatenation
+    // Example: [0:v]trim=0:5,setpts=PTS-STARTPTS[v0]; [0:a]atrim=0:5,asetpts=PTS-STARTPTS[a0]; ... [v0][a0][v1][a1]concat=n=2:v=1:a=1[out]
+    let filter = '';
+    let vStreams = '';
+    let aStreams = '';
+
+    keepSegments.forEach((seg, i) => {
+      filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
+      filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
+      vStreams += `[v${i}]`;
+      aStreams += `[a${i}]`;
+    });
+
+    filter += `${vStreams}${aStreams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
+
+    const session = await FFmpegKit.execute(
+      `-i "${videoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -preset superfast -y "${outputPath}"`
+    );
+
+    if (ReturnCode.isSuccess(await session.getReturnCode())) {
+      return outputPath;
+    } else {
+      throw new Error('FFmpeg silence removal failed');
+    }
   }
 
-  async burnSubtitles(
-    videoPath: string,
-    _srtPath: string,
-    _style: SubtitleStyle
-  ): Promise<string> {
-    console.log('[FFmpeg] burnSubtitles (mock)');
-    return videoPath;
-  }
-
-  async generateThumbnail(videoPath: string, _time: number = 0): Promise<string> {
-    console.log('[FFmpeg] generateThumbnail (mock)');
-    // Return empty string — no thumbnail in mock mode
-    return '';
-  }
-
+  /**
+   * Final export with all settings (Subtitles, Watermark, Speed, etc.)
+   */
   async exportVideo(
     config: ExportConfig,
     isPremium: boolean,
     onProgress?: (progress: number, step: string) => void
   ): Promise<string> {
-    console.log('[FFmpeg] exportVideo (mock):', config);
+    const outputPath = `${(FileSystem as any).documentDirectory}exports/BlitzCut_${Date.now()}.mp4`;
+    onProgress?.(0.1, 'Preparing export...');
 
-    // Free plan duration guard still works
-    if (!isPremium) {
-      const info = await this.getVideoInfo(config.videoPath);
-      const exportDuration = (config.trimEnd ?? info.duration) - (config.trimStart ?? 0);
-      if (exportDuration > 60) {
-        throw new Error('FREE_PLAN_DURATION_EXCEEDED');
-      }
+    // Build command parts
+    let filters = [];
+    
+    // 1. Scale & Aspect Ratio
+    const is4K = config.resolution.toUpperCase() === '4K';
+    const [width, height] = is4K ? [2160, 3840] : [1080, 1920];
+    filters.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`);
+
+    // 2. Subtitles (if SRT exists)
+    if (config.srtPath && config.includeSubtitles) {
+      // ffmpeg expects absolute path with escaped colons for subtitles filter on some platforms
+      const srtPathEscaped = config.srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      filters.push(`subtitles='${srtPathEscaped}'`);
     }
 
-    // Simulate export progress
-    const steps = ['Analyzing', 'Processing', 'Encoding', 'Finalizing'];
-    for (let i = 0; i < steps.length; i++) {
-      onProgress?.((i + 1) / steps.length, steps[i]);
-      await this.delay(300);
+    // 3. Watermark (if free plan)
+    if (!isPremium && config.watermark) {
+      // Draw text watermark for mock/simpler implementation
+      filters.push(`drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5`);
     }
 
-    // Ensure exports directory exists
-    const exportsDirUri = FileSystem.documentDirectory + 'exports/';
-    const dirInfo = await FileSystem.getInfoAsync(exportsDirUri);
-    if (!dirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(exportsDirUri, { intermediates: true });
-    }
+    const filterString = filters.join(',');
+    
+    // Progress tracking via statistics
+    FFmpegKitConfig.enableStatisticsCallback((stats) => {
+      // In a real app, we'd compare stats.getTime() with total duration
+      onProgress?.(0.5, 'Encoding...');
+    });
 
-    // In mock mode, just return the original video path
-    onProgress?.(1, 'Done');
-    return config.videoPath;
+    const session = await FFmpegKit.execute(
+      `-i "${config.videoPath}" -vf "${filterString}" -c:v libx264 -preset fast -y "${outputPath}"`
+    );
+
+    if (ReturnCode.isSuccess(await session.getReturnCode())) {
+      onProgress?.(1, 'Complete');
+      return outputPath;
+    } else {
+      throw new Error('FFmpeg export failed');
+    }
   }
 
-  async getVideoInfo(_videoPath: string): Promise<{
+  async getVideoInfo(videoPath: string): Promise<{
     duration: number;
     width: number;
     height: number;
     fps: number;
   }> {
-    console.log('[FFmpeg] getVideoInfo (mock)');
-    return { duration: 60, width: 1080, height: 1920, fps: 30 };
-  }
+    const session = await FFmpegKit.execute(`-i "${videoPath}" -hide_banner`);
+    const output = await session.getOutput();
+    
+    // Parse duration from: Duration: 00:00:05.10, start: 0.000000, bitrate: 201 kb/s
+    const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2}).(\d{2})/);
+    let duration = 0;
+    if (durationMatch) {
+      duration = parseInt(durationMatch[1]) * 3600 +
+                 parseInt(durationMatch[2]) * 60 +
+                 parseInt(durationMatch[3]) +
+                 parseInt(durationMatch[4]) / 100;
+    }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return { duration, width: 1080, height: 1920, fps: 30 };
   }
 }
 

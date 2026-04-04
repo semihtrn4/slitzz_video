@@ -6,12 +6,16 @@ import { FREE_PLAN_LIMITS } from '../constants/exportPresets';
 
 interface SubscriptionState {
   isPremium: boolean;
+  debugProMode: boolean;
   plan: PlanType;
   setPremium: (isPremium: boolean) => void;
+  setDebugProMode: (enabled: boolean) => void;
   setPlan: (plan: PlanType) => void;
   togglePremium: () => void;
+  toggleDebugProMode: () => void;
   
   // Feature checks
+  isUserPremium: () => boolean;
   canCreateProject: (currentCount: number) => boolean;
   canExportDuration: (duration: number) => boolean;
   canUseSubtitleStyle: (styleId: string) => boolean;
@@ -25,42 +29,49 @@ export const useSubscriptionStore = create<SubscriptionState>()(
   persist(
     (set, get) => ({
       isPremium: false,
+      debugProMode: false,
       plan: 'free',
 
       setPremium: (isPremium) => set({ isPremium }),
+      setDebugProMode: (debugProMode) => set({ debugProMode }),
       setPlan: (plan) => set({ plan, isPremium: plan !== 'free' }),
       togglePremium: () => set((state) => ({ isPremium: !state.isPremium })),
+      toggleDebugProMode: () => set((state) => ({ debugProMode: !state.debugProMode })),
+
+      isUserPremium: () => {
+        return get().isPremium || get().debugProMode;
+      },
 
       canCreateProject: (currentCount) => {
-        if (get().isPremium) return true;
+        if (get().isUserPremium()) return true;
         return currentCount < FREE_PLAN_LIMITS.maxProjects;
       },
 
       canExportDuration: (duration) => {
-        if (get().isPremium) return true;
+        if (get().isUserPremium()) return true;
         return duration <= FREE_PLAN_LIMITS.maxExportDuration;
       },
 
       canUseSubtitleStyle: (styleId) => {
-        if (get().isPremium) return true;
+        if (get().isUserPremium()) return true;
         return FREE_PLAN_LIMITS.allowedSubtitleStyles.includes(styleId as any);
       },
 
       canRemoveSilence: (duration) => {
-        if (get().isPremium) return true;
+        if (get().isUserPremium()) return true;
         return duration <= FREE_PLAN_LIMITS.silenceRemovalMaxDuration;
       },
 
       canUseBackgroundMusic: () => {
-        return get().isPremium || FREE_PLAN_LIMITS.allowBackgroundMusic;
+        return get().isUserPremium() || FREE_PLAN_LIMITS.allowBackgroundMusic;
       },
 
       canExport4K: () => {
-        return get().isPremium || FREE_PLAN_LIMITS.allow4KExport;
+        return get().isUserPremium() || FREE_PLAN_LIMITS.allow4KExport;
       },
 
       hasWatermark: () => {
-        if (get().isPremium) return false;
+        if (get().isUserPremium()) return false;
         return FREE_PLAN_LIMITS.watermark;
       },
     }),

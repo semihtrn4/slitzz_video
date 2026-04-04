@@ -14,7 +14,8 @@ import type { Project, LanguageCode, ExportConfig } from '../types';
 
 export function useVideoEditor(project: Project) {
   const router = useRouter();
-  const { isPremium, canRemoveSilence } = useSubscriptionStore();
+  const { isUserPremium, canRemoveSilence } = useSubscriptionStore();
+  const hasPremium = isUserPremium();
   const { updateProject } = useProjectStore();
   const haptics = useHaptics();
   const toast = useToast();
@@ -33,7 +34,7 @@ export function useVideoEditor(project: Project) {
   } = useEditorStore();
 
   const detectSilences = useCallback(async () => {
-    if (!isPremium && !canRemoveSilence(project.duration)) {
+    if (!hasPremium && !canRemoveSilence(project.duration)) {
       toast.show('Silence removal for videos longer than 30s requires Premium.', 'info');
       router.push('/paywall');
       return;
@@ -69,7 +70,7 @@ export function useVideoEditor(project: Project) {
       setProcessing(false);
       setProcessingStep('idle');
     }
-  }, [project, silenceSettings, isPremium, canRemoveSilence, router, setSilenceSegments, setProcessing, setProcessingProgress, setProcessingStep]);
+  }, [project, silenceSettings, hasPremium, canRemoveSilence, router, setSilenceSegments, setProcessing, setProcessingProgress, setProcessingStep]);
 
   const applySilenceRemoval = useCallback(async () => {
     const keepSegments = silenceService.computeKeepSegments(
@@ -175,7 +176,7 @@ export function useVideoEditor(project: Project) {
         }
       }
 
-      const outputPath = await ffmpegService.exportVideo(config, isPremium, (progress, step) => {
+      const outputPath = await ffmpegService.exportVideo(config, hasPremium, (progress, step) => {
         setProcessingProgress(progress);
         setProcessingStep(step as any);
       });
@@ -199,7 +200,7 @@ export function useVideoEditor(project: Project) {
     } finally {
       setProcessing(false);
     }
-  }, [project, isPremium, router, setProcessing, setProcessingProgress, setProcessingStep, updateProject]);
+  }, [project, hasPremium, router, setProcessing, setProcessingProgress, setProcessingStep, updateProject]);
 
   const seekToTime = useCallback((time: number) => {
     useEditorStore.getState().setPlaybackPosition(time);
