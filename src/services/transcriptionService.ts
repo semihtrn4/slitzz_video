@@ -3,9 +3,9 @@ const documentDirectory = (FileSystem as any).documentDirectory;
 const cacheDirectory = (FileSystem as any).cacheDirectory;
 import type { SubtitleSegment, WordTimestamp } from '../types';
 
-const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin';
+const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
 const MODEL_DIR = (documentDirectory || '') + 'models/';
-const MODEL_PATH = MODEL_DIR + 'ggml-tiny.bin';
+const MODEL_PATH = MODEL_DIR + 'ggml-base.bin';
 
 export class TranscriptionService {
   private static instance: TranscriptionService;
@@ -144,6 +144,112 @@ export class TranscriptionService {
     const srtContent = buildSRTContent(segments);
     await FileSystem.writeAsStringAsync(srtPath, srtContent);
     return srtPath;
+  }
+
+  /**
+   * Splits long segments into smaller chunks (1-2 words per segment)
+   * This is critical for short-form video formats (TikTok/Reels).
+   */
+  splitSegmentsIntoWords(segments: SubtitleSegment[]): SubtitleSegment[] {
+    const newSegments: SubtitleSegment[] = [];
+    let idCounter = 0;
+
+    segments.forEach(seg => {
+      if (!seg.words || seg.words.length === 0) {
+        // Fallback for segments without word-level timestamps
+        const words = seg.text.split(' ');
+        if (words.length <= 2) {
+          newSegments.push(seg);
+        } else {
+          // Rudimentary splitting if no word-level timestamps available
+          const duration = seg.end - seg.start;
+          const timePerWord = duration / words.length;
+          for (let i = 0; i < words.length; i += 2) {
+            const pair = words.slice(i, i + 2).join(' ');
+            newSegments.push({
+              id: `wseg_${idCounter++}`,
+              start: seg.start + (i * timePerWord),
+              end: seg.start + (Math.min(i + 2, words.length) * timePerWord),
+              text: pair
+            });
+          }
+        }
+        return;
+      }
+
+      // Pro splitting using actual word timestamps
+      for (let i = 0; i < seg.words.length; i += 2) {
+        const wordPair = seg.words.slice(i, i + 2);
+        const text = wordPair.map(w => w.word.trim()).join(' ');
+        newSegments.push({
+          id: `wseg_${idCounter++}`,
+          start: wordPair[0].start,
+          end: wordPair[wordPair.length - 1].end,
+          text
+        });
+      }
+    });
+
+    return newSegments;
+  }
+
+  /**
+   * Generates an Advanced Substation Alpha (.ass) subtitle file.
+   * Superior to SRT for precise positioning, coloring, and styling.
+   */
+  async generateASS(
+    segments: SubtitleSegment[],
+    style: any,
+    resolution: { width: number; height: number }
+  ): Promise<string> {
+    const assPath = `${cacheDirectory || ''}subtitles_${Date.now()}.ass`;
+    
+    // Convert hex colors to ASS format (&HBBGGRR&)
+    const convertColor = (hex: string) => {
+      const r = hex.substring(1, 3);
+      const g = hex.substring(3, 5);
+      const b = hex.substring(5, 7);
+      return `&H00${b}${g}${r}`;
+    };
+
+    const textColor = convertColor(style.textColor || '#FFFFFF');
+    const bgColor = convertColor(style.backgroundColor || '#000000');
+    
+    // Position calculation
+    // Alignment: 2=bottom, 5=middle, 8=top (numpad layout)
+    let alignment = 2;
+    if (style.position === 'top') alignment = 8;
+    else if (style.position === 'middle') alignment = 5;
+
+    const assHeader = `[Script Info]
+ScriptType: v4.00+
+PlayResX: ${resolution.width}
+PlayResY: ${resolution.height}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,${style.fontFamily || 'Arial'},${style.fontSize || 70},${textColor},&H000000FF,&H00000000,${bgColor},${style.bold ? -1 : 0},0,0,0,100,100,0,0,1,2,2,${alignment},20,20,50,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+    let events = '';
+    const formatTime = (seconds: number) => {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      const ms = Math.floor((seconds % 1) * 100);
+      return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
+    };
+
+    segments.forEach(seg => {
+      events += `Dialogue: 0,${formatTime(seg.start)},${formatTime(seg.end)},Default,,0,0,0,,${seg.text}\n`;
+    });
+
+    await FileSystem.writeAsStringAsync(assPath, assHeader + events);
+    return assPath;
   }
 }
 

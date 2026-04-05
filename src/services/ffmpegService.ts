@@ -194,9 +194,10 @@ export class FFmpegService {
       audioStream = '[speeda]';
     }
 
-    // 4. Subtitles (if SRT exists)
+    // 4. Subtitles (if SRT/ASS exists)
     if (config.srtPath && config.includeSubtitles) {
       const srtPathEscaped = config.srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      // ffmpeg subtitles filter uses 'subtitles' for both .srt and .ass
       filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[subbed]; `;
       videoStream = '[subbed]';
     }

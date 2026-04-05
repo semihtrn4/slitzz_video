@@ -54,6 +54,7 @@ export default function EditorScreen() {
     silenceSegments,
     toggleSilenceExcluded,
     subtitleStyle,
+    setSubtitleStyle,
     applyPreset,
     subtitleSegments,
     audioSettings,
@@ -328,6 +329,58 @@ export default function EditorScreen() {
                 </TouchableOpacity>
               ))}
             </ScrollView>
+
+            <View style={styles.divider} />
+
+            <Text style={styles.sectionTitle}>Size & Color</Text>
+            <Slider
+              label="Font Size"
+              value={subtitleStyle.fontSize}
+              minimumValue={20}
+              maximumValue={150}
+              step={2}
+              onValueChange={(v) => setSubtitleStyle({ fontSize: v })}
+              formatValue={(v) => `${v}px`}
+            />
+
+            <View style={styles.colorRow}>
+              {['#FFFFFF', '#FCD34D', '#22D3EE', '#F87171', '#4ADE80', '#000000'].map((color) => (
+                <TouchableOpacity
+                  key={color}
+                  style={[
+                    styles.colorOption,
+                    { backgroundColor: color },
+                    subtitleStyle.textColor === color && styles.colorOptionActive,
+                  ]}
+                  onPress={() => setSubtitleStyle({ textColor: color })}
+                />
+              ))}
+            </View>
+
+            <View style={styles.divider} />
+
+            <Text style={styles.sectionTitle}>Position</Text>
+            <View style={styles.positionGrid}>
+              {[
+                { label: 'Top', value: 'top' },
+                { label: 'Middle', value: 'middle' },
+                { label: 'Bottom', value: 'bottom' },
+              ].map((pos) => (
+                <TouchableOpacity
+                  key={pos.value}
+                  style={[
+                    styles.positionItem,
+                    subtitleStyle.position === pos.value && styles.positionItemActive,
+                  ]}
+                  onPress={() => setSubtitleStyle({ position: pos.value as any })}
+                >
+                  <Text style={[
+                      styles.positionLabel,
+                      subtitleStyle.position === pos.value && styles.positionLabelActive
+                  ]}>{pos.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
 
             <View style={styles.divider} />
 
@@ -932,5 +985,49 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.danger,
     marginTop: 4,
+  },
+  colorRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingHorizontal: 4,
+    marginBottom: 8,
+  },
+  colorOption: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  colorOptionActive: {
+    borderColor: primary,
+  },
+  positionGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 8,
+  },
+  positionItem: {
+    flex: 1,
+    backgroundColor: surfaceElevated,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: border,
+  },
+  positionItemActive: {
+    backgroundColor: `${primary}20`,
+    borderColor: primary,
+  },
+  positionLabel: {
+    color: textSecondary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  positionLabelActive: {
+    color: primary,
   },
 });

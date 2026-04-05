@@ -159,22 +159,25 @@ export function useVideoEditor(project: Project) {
           setProcessingStep('generating-subtitles');
           
           let adjustedSegments = subtitleSegments;
+          // [Pro] Split segments into 1-2 words for that "Shorts" look
+          adjustedSegments = transcriptionService.splitSegmentsIntoWords(subtitleSegments);
+
           if (config.trimStart && config.trimStart > 0) {
-            adjustedSegments = subtitleSegments
+            adjustedSegments = adjustedSegments
               .filter(seg => seg.end > config.trimStart!)
               .map(seg => ({
                 ...seg,
                 start: Math.max(0, seg.start - config.trimStart!),
                 end: seg.end - config.trimStart!,
-                words: seg.words?.filter(w => w.end > config.trimStart!).map(w => ({
-                  ...w,
-                  start: Math.max(0, w.start - config.trimStart!),
-                  end: w.end - config.trimStart!
-                }))
               }));
           }
 
-          config.srtPath = await transcriptionService.generateSRT(adjustedSegments);
+          // Generate professional ASS subtitles instead of SRT
+          config.srtPath = await transcriptionService.generateASS(
+            adjustedSegments, 
+            subtitleStyle,
+            { width: 1080, height: 1920 } // Base resolution for style scaling
+          );
           config.subtitleStyle = subtitleStyle;
         }
       }
