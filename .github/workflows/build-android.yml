@@ -39,8 +39,9 @@ jobs:
       - name: 📱 Build Android (Local on GitHub)
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
+          EAS_LOCAL_BUILD_SKIP_DOCKER: 1
         run: |
-          npx eas-cli build --local --no-docker --platform android --profile preview --non-interactive
+          npx eas-cli build --local --platform android --profile preview --non-interactive
 
       - name: 📤 Upload Build Result (APK/AAB)
         uses: actions/upload-artifact@v4
