@@ -152,6 +152,18 @@ export class FFmpegService {
     let videoStream = '[0:v]';
     let audioStream = '[0:a]';
     
+    // --- Audio Initial Preparation ---
+    // Check if original video has audio to prevent FFmpeg crashes during Trim/Speed/Mix
+    const hasAudio = await this.checkHasAudio(config.videoPath);
+    console.log(`[FFmpeg] Video has audio: ${hasAudio}`);
+
+    if (!hasAudio) {
+      // Create a silent source matching video if no audio exists
+      // Using anullsrc as input is complex, so we'll use a filter
+      filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[silent_init]; `;
+      audioStream = '[silent_init]';
+    }
+    
     // 1. Scale & Aspect Ratio & Resolution
     const is4K = config.resolution.toUpperCase() === '4K';
     let baseWidth = 1080;
@@ -186,11 +198,25 @@ export class FFmpegService {
     // filterComplex += `${videoStream}eq=brightness=0:contrast=1[adjusted]; `;
     // videoStream = '[adjusted]';
 
-    // 3. Speed (Video)
+    // 3. Speed (Video & Audio)
     if (config.speed && config.speed !== 1) {
-      filterComplex += `${videoStream}setpts=${(1/config.speed).toFixed(2)}*PTS[speedv]; `;
+      filterComplex += `${videoStream}setpts=${(1/config.speed).toFixed(4)}*PTS[speedv]; `;
       videoStream = '[speedv]';
-      filterComplex += `${audioStream}atempo=${config.speed.toFixed(2)}[speeda]; `;
+      
+      // atempo has a limit of 0.5 - 2.0. Need to chain if outside this range.
+      let s = config.speed;
+      let atempoFilter = '';
+      while (s > 2.0) {
+        atempoFilter += 'atempo=2.0,';
+        s /= 2.0;
+      }
+      while (s < 0.5) {
+        atempoFilter += 'atempo=0.5,';
+        s /= 0.5;
+      }
+      atempoFilter += `atempo=${s.toFixed(3)}`;
+      
+      filterComplex += `${audioStream}${atempoFilter}[speeda]; `;
       audioStream = '[speeda]';
     }
 
@@ -201,40 +227,36 @@ export class FFmpegService {
       filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[subbed]; `;
       videoStream = '[subbed]';
     }
-
+    
     // 5. Watermark (if free plan)
     if (!isPremium && config.watermark) {
       filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[watermarked]; `;
       videoStream = '[watermarked]';
     }
 
-    // 6. Audio Volume & Background Music
-    let finalAudio = '[outa]';
-    let audioFilters = '';
-    
-    // Volume for original audio
-    const vol = (config.audioVolume / 100).toFixed(2);
-    audioFilters += `${audioStream}volume=${vol}[vol_orig]; `;
+    // --- Audio Mixing & Final Volume ---
+    // At this point, audioStream has already been processed by Trim/Speed filters if they were active
+    const finalVol = (config.audioVolume / 100).toFixed(2);
+    filterComplex += `${audioStream}volume=${finalVol}[vol_orig]; `;
     
     if (config.musicPath && config.musicVolume !== undefined) {
       const mVol = (config.musicVolume / 100).toFixed(2);
-      // Mix background music
-      audioFilters += `[1:a]volume=${mVol}[vol_music]; `;
-      audioFilters += `[vol_orig][vol_music]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
+      // Mix background music (Input index 1)
+      filterComplex += `[1:a]volume=${mVol}[vol_music]; `;
+      filterComplex += `[vol_orig][vol_music]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
     } else {
-      audioFilters += `[vol_orig]anull[outa]`;
+      filterComplex += `[vol_orig]anull[outa]`;
     }
-    
-    filterComplex += audioFilters;
 
     const command = [
       `-i "${config.videoPath}"`,
-      config.musicPath ? `-i "${config.musicPath}"` : '',
+      config.musicPath ? `-stream_loop -1 -i "${config.musicPath}"` : '',
       `-filter_complex "${filterComplex}"`,
       `-map "${videoStream}"`,
       `-map "[outa]"`,
       `-c:v libx264 -preset fast`,
       config.resolution === '4k' ? '-b:v 10M' : '-b:v 5M',
+      `-shortest`, // Ensure video stops when the visual stream ends
       `-y "${outputPath}"`
     ].filter(Boolean).join(' ');
     
@@ -274,6 +296,19 @@ export class FFmpegService {
     }
 
     return { duration, width: 1080, height: 1920, fps: 30 };
+  }
+
+  /**
+   * Checks if a video file has an audio stream
+   */
+  async checkHasAudio(videoPath: string): Promise<boolean> {
+    try {
+      const session = await FFmpegKit.execute(`-i "${videoPath}" -hide_banner`);
+      const output = await session.getOutput();
+      return output.includes('Audio:');
+    } catch {
+      return false;
+    }
   }
 }
 

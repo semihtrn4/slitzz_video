@@ -118,12 +118,12 @@ export const FONT_OPTIONS = [
 ];
 
 export const BACKGROUND_TRACKS: BackgroundTrack[] = [
-  { id: '1', name: 'Upbeat Pop', artist: 'BlitzCut', path: 'builtin://upbeat', duration: 180 },
-  { id: '2', name: 'Lo-Fi Chill', artist: 'BlitzCut', path: 'builtin://lofi', duration: 240 },
-  { id: '3', name: 'Epic Cinematic', artist: 'BlitzCut', path: 'builtin://epic', duration: 200 },
-  { id: '4', name: 'Tropical House', artist: 'BlitzCut', path: 'builtin://tropical', duration: 190 },
-  { id: '5', name: 'Acoustic Vibes', artist: 'BlitzCut', path: 'builtin://acoustic', duration: 210 },
-  { id: '6', name: 'Electronic Beat', artist: 'BlitzCut', path: 'builtin://electronic', duration: 175 },
+  { id: '1', name: 'Upbeat Pop', artist: 'BlitzCut', path: 'upbeat.mp3', duration: 180 },
+  { id: '2', name: 'Lo-Fi Chill', artist: 'BlitzCut', path: 'lofi.mp3', duration: 240 },
+  { id: '3', name: 'Epic Cinematic', artist: 'BlitzCut', path: 'epic.mp3', duration: 200 },
+  { id: '4', name: 'Tropical House', artist: 'BlitzCut', path: 'tropical.mp3', duration: 190 },
+  { id: '5', name: 'Acoustic Vibes', artist: 'BlitzCut', path: 'acoustic.mp3', duration: 210 },
+  { id: '6', name: 'Electronic Beat', artist: 'BlitzCut', path: 'electronic.mp3', duration: 175 },
 ];
 
 export const ASPECT_RATIOS: { label: string; value: AspectRatio; icon: string; description: string }[] = [

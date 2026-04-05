@@ -620,15 +620,25 @@ function formatTimeMsMs(seconds: number): string {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
 }
 
-/** Parse mm:ss.ms string to seconds, returns null if invalid */
+/** Parse mm:ss.ms or plain seconds string to seconds, returns null if invalid */
 function parseTimeMsMs(text: string): number | null {
+  // Try mm:ss.ms format
   const match = text.match(/^(\d{1,2}):(\d{2})\.(\d{2})$/);
-  if (!match) return null;
-  const mins = parseInt(match[1], 10);
-  const secs = parseInt(match[2], 10);
-  const ms = parseInt(match[3], 10);
-  if (secs >= 60 || ms > 99) return null;
-  return mins * 60 + secs + ms / 100;
+  if (match) {
+    const mins = parseInt(match[1], 10);
+    const secs = parseInt(match[2], 10);
+    const ms = parseInt(match[3], 10);
+    if (secs >= 60 || ms > 99) return null;
+    return mins * 60 + secs + ms / 100;
+  }
+  
+  // Try plain seconds format (e.g. "5" or "5.5")
+  const plainSecs = parseFloat(text);
+  if (!isNaN(plainSecs) && plainSecs >= 0) {
+    return plainSecs;
+  }
+
+  return null;
 }
 
 const styles = StyleSheet.create({

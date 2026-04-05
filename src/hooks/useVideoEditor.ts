@@ -159,8 +159,7 @@ export function useVideoEditor(project: Project) {
           setProcessingStep('generating-subtitles');
           
           let adjustedSegments = subtitleSegments;
-          // [Pro] Split segments into 1-2 words for that "Shorts" look
-          adjustedSegments = transcriptionService.splitSegmentsIntoWords(subtitleSegments);
+          // [Note] TranscriptionService already splits segments into 1-2 words since the last update.
 
           if (config.trimStart && config.trimStart > 0) {
             adjustedSegments = adjustedSegments

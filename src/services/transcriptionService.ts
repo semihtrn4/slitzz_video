@@ -92,6 +92,7 @@ export class TranscriptionService {
     // ctx.transcribe returns { stop, promise }
     const { promise } = ctx.transcribe(audioPath, {
       language,
+      word_timestamps: true, // Ensure we get word-level precision
       onProgress: (p: number) => {
         console.log(`[Whisper] Progress: ${p}%`);
         onProgress?.(`Transcribing... ${p}%`);
@@ -127,10 +128,15 @@ export class TranscriptionService {
 
     if (segments.length === 0) {
       console.warn('[Whisper] No valid segments found after filtering');
+      return [];
     }
 
+    // [Pro] Automatically split segments into 1-2 words for the UI and Export
+    console.log('[Whisper] Splitting segments into 1-2 words...');
+    const splitSegments = this.splitSegmentsIntoWords(segments);
+
     onProgress?.('Complete');
-    return segments;
+    return splitSegments;
   }
 
   // Generate SRT file from segments (Requirements: 6.4, 6.5)
