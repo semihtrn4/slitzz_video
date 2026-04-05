@@ -99,30 +99,37 @@ export class TranscriptionService {
     });
 
     const transcribeResult = await promise;
-    console.log('[Whisper] Transcription complete. Segments:', transcribeResult.segments.length);
-
-    onProgress?.('Complete');
+    console.log('[Whisper] Raw Result (partial):', JSON.stringify(transcribeResult).substring(0, 500));
+    
+    onProgress?.('Processing segments...');
 
     const segments: SubtitleSegment[] = [];
-    transcribeResult.segments.forEach((seg: any, index: number) => {
-      const text = seg.text.trim();
-      // Whisper bazen sadece müzik [MUSIC] veya sessizlik [SILENCE] döndürür, bunları filtreleyelim
-      if (!text || text.match(/^\[.*\]$/)) return;
-      
-      segments.push({
-        id: `seg_${index}`,
-        // whisper.rn timestamps are in centoseconds
-        start: seg.t0 / 100,
-        end: seg.t1 / 100,
-        text,
-        words: seg.words?.map((w: any) => ({
-          word: w.word,
-          start: w.t0 / 100,
-          end: w.t1 / 100,
-        }))
+    if (transcribeResult && transcribeResult.segments) {
+      transcribeResult.segments.forEach((seg: any, index: number) => {
+        const text = seg.text?.trim() || '';
+        // Whisper bazen sadece müzik [MUSIC] veya sessizlik [SILENCE] döndürür, bunları filtreleyelim
+        if (!text || text.match(/^\[.*\]$/)) return;
+        
+        segments.push({
+          id: `seg_${index}`,
+          // whisper.rn timestamps are in centoseconds
+          start: seg.t0 / 100,
+          end: seg.t1 / 100,
+          text,
+          words: seg.words?.map((w: any) => ({
+            word: w.word,
+            start: w.t0 / 100,
+            end: w.t1 / 100,
+          }))
+        });
       });
-    });
+    }
 
+    if (segments.length === 0) {
+      console.warn('[Whisper] No valid segments found after filtering');
+    }
+
+    onProgress?.('Complete');
     return segments;
   }
 

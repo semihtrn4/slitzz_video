@@ -22,12 +22,20 @@ export class FFmpegService {
   /**
    * Extracts audio stream from video for processing (Whisper/Silence Detection)
    */
-  async extractAudio(videoPath: string): Promise<string> {
-    const audioPath = `${cacheDirectory || ''}extracted_audio_${Date.now()}.m4a`;
+  async extractAudio(videoPath: string, forWhisper: boolean = false): Promise<string> {
+    const ext = forWhisper ? 'wav' : 'm4a';
+    const audioPath = `${cacheDirectory || ''}extracted_audio_${Date.now()}.${ext}`;
     console.log('[FFmpeg] Extracting audio to:', audioPath);
+    
+    let command = '';
+    if (forWhisper) {
+      // 16kHz, mono, 16-bit PCM WAV (Standard for whisper.cpp/whisper.rn)
+      command = `-i "${videoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${audioPath}"`;
+    } else {
+      command = `-i "${videoPath}" -vn -acodec copy -y "${audioPath}"`;
+    }
 
-    // -vn: no video, -acodec copy: copy audio stream without re-encoding
-    const session = await FFmpegKit.execute(`-i "${videoPath}" -vn -acodec copy -y "${audioPath}"`);
+    const session = await FFmpegKit.execute(command);
     const returnCode = await session.getReturnCode();
 
     if (ReturnCode.isSuccess(returnCode)) {
@@ -164,7 +172,17 @@ export class FFmpegService {
     filterComplex += `${videoStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[scaled]; `;
     videoStream = '[scaled]';
 
-    // 2. Adjustments (Brightness/Contrast) - if needed
+    // 2. Trim (Video & Audio)
+    if (config.trimStart !== undefined || config.trimEnd !== undefined) {
+      const start = config.trimStart || 0;
+      const end = config.trimEnd || 999999; // effectively no end if not specified
+      filterComplex += `${videoStream}trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS[trimmedv]; `;
+      videoStream = '[trimmedv]';
+      filterComplex += `${audioStream}atrim=start=${start.toFixed(3)}:end=${end.toFixed(3)},asetpts=PTS-STARTPTS[trimmeda]; `;
+      audioStream = '[trimmeda]';
+    }
+
+    // 3. Adjustments (Brightness/Contrast) - if needed
     // filterComplex += `${videoStream}eq=brightness=0:contrast=1[adjusted]; `;
     // videoStream = '[adjusted]';
 
@@ -199,12 +217,11 @@ export class FFmpegService {
     
     if (config.musicPath && config.musicVolume !== undefined) {
       const mVol = (config.musicVolume / 100).toFixed(2);
-      // Mix background music (looping not trivial in one command, but amix handles it)
-      // Input 1 is the music track
+      // Mix background music
       audioFilters += `[1:a]volume=${mVol}[vol_music]; `;
       audioFilters += `[vol_orig][vol_music]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
     } else {
-      audioFilters += `[vol_orig]copy[outa]`;
+      audioFilters += `[vol_orig]anull[outa]`;
     }
     
     filterComplex += audioFilters;

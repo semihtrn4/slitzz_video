@@ -118,9 +118,12 @@ export function useVideoEditor(project: Project) {
         });
       }
 
-      // Extract audio
+      // Extract audio (using WAV for Whisper)
       setProcessingStep('extracting-audio');
-      const audioPath = await ffmpegService.extractAudio(project.processedVideoPath || project.originalVideoPath);
+      const audioPath = await ffmpegService.extractAudio(
+        project.processedVideoPath || project.originalVideoPath,
+        true // forWhisper
+      );
 
       // Transcribe
       setProcessingStep('transcribing');
