@@ -13,6 +13,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 const documentDirectory = (FileSystem as any).documentDirectory;
 const cacheDirectory = (FileSystem as any).cacheDirectory;
+import { getPath } from '@/src/utils/pathUtils';
 import {
   Image as ImageIcon,
   FileUp,
@@ -60,9 +61,9 @@ export default function CreateScreen() {
           size: fileInfo.exists ? fileInfo.size : 0,
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error picking video:', error);
-      Alert.alert('Error', 'Failed to pick video from gallery');
+      Alert.alert('Error', `Failed to pick video: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -87,9 +88,9 @@ export default function CreateScreen() {
           size: fileInfo.exists ? fileInfo.size : 0,
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error picking document:', error);
-      Alert.alert('Error', 'Failed to import video file');
+      Alert.alert('Error', `Failed to import video: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -119,15 +120,16 @@ export default function CreateScreen() {
     setIsLoading(true);
     try {
       // Copy video to app directory
-      const projectsDir = `${documentDirectory || ''}projects/`;
+      const projectsDir = getPath(documentDirectory, 'projects/');
       const dirInfo = await FileSystem.getInfoAsync(projectsDir);
       if (!dirInfo.exists) {
         await FileSystem.makeDirectoryAsync(projectsDir, { intermediates: true });
       }
 
       const fileName = `project_${Date.now()}.mp4`;
-      const destUri = `${projectsDir}${fileName}`;
+      const destUri = getPath(projectsDir, fileName);
       
+      console.log('[Create] Copying from:', selectedVideo.uri, 'to:', destUri);
       await FileSystem.copyAsync({
         from: selectedVideo.uri,
         to: destUri
@@ -147,9 +149,9 @@ export default function CreateScreen() {
 
       // Navigate to editor
       router.push(`/editor/${projectId}`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating project:', error);
-      Alert.alert('Error', 'Failed to create project');
+      Alert.alert('Error', `Failed to create project: ${error.message || 'Unknown error'}`);
     } finally {
       setIsLoading(false);
     }

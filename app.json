@@ -19,7 +19,8 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Videolarınızı kamera rulosuna kaydetmek için",
         "NSMicrophoneUsageDescription": "Sesinizi yazıya dökmek ve transkripsiyon için mikrofon erişimi gereklidir.",
-        "NSCameraUsageDescription": "Video çekimi için kamera erişimi"
+        "NSCameraUsageDescription": "Video çekimi için kamera erişimi",
+        "NSPhotoLibraryAddUsageDescription": "Videolarınızı kaydetmek için gereklidir."
       }
     },
     "android": {
@@ -32,6 +33,10 @@
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
