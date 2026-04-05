@@ -1,5 +1,7 @@
 import { FFmpegKit, ReturnCode, FFmpegKitConfig } from 'ffmpeg-kit-react-native';
 import * as FileSystem from 'expo-file-system';
+const documentDirectory = (FileSystem as any).documentDirectory;
+const cacheDirectory = (FileSystem as any).cacheDirectory;
 import { silenceService } from './silenceService';
 import type { SilenceSegment, TimeSegment, SubtitleStyle, ExportConfig } from '../types';
 
@@ -21,7 +23,7 @@ export class FFmpegService {
    * Extracts audio stream from video for processing (Whisper/Silence Detection)
    */
   async extractAudio(videoPath: string): Promise<string> {
-    const audioPath = `${(FileSystem as any).cacheDirectory}extracted_audio_${Date.now()}.m4a`;
+    const audioPath = `${cacheDirectory || ''}extracted_audio_${Date.now()}.m4a`;
     console.log('[FFmpeg] Extracting audio to:', audioPath);
 
     // -vn: no video, -acodec copy: copy audio stream without re-encoding
@@ -33,6 +35,26 @@ export class FFmpegService {
     } else {
       const logs = await session.getLogs();
       throw new Error(`FFmpeg audio extraction failed: ${logs[logs.length - 1]?.getMessage()}`);
+    }
+  }
+
+  /**
+   * Generates a thumbnail for a video at a specific time
+   */
+  async generateThumbnail(videoPath: string, timeSeconds: number): Promise<string> {
+    const thumbnailPath = `${cacheDirectory || ''}thumb_${Date.now()}.jpg`;
+    console.log('[FFmpeg] Generating thumbnail at:', thumbnailPath);
+
+    // -ss: seek to time, -i: input, -vframes 1: extract 1 frame
+    const session = await FFmpegKit.execute(
+      `-ss ${timeSeconds} -i "${videoPath}" -vframes 1 -q:v 2 -y "${thumbnailPath}"`
+    );
+    const returnCode = await session.getReturnCode();
+
+    if (ReturnCode.isSuccess(returnCode)) {
+      return thumbnailPath;
+    } else {
+      throw new Error('FFmpeg thumbnail generation failed');
     }
   }
 
@@ -72,7 +94,7 @@ export class FFmpegService {
   ): Promise<string> {
     if (keepSegments.length === 0) return videoPath;
 
-    const outputPath = `${(FileSystem as any).cacheDirectory}cut_${Date.now()}.mp4`;
+    const outputPath = `${cacheDirectory || ''}cut_${Date.now()}.mp4`;
     console.log('[FFmpeg] Removing silences, generating:', outputPath);
 
     // Building complex filter for trimming and concatenation
@@ -109,7 +131,13 @@ export class FFmpegService {
     isPremium: boolean,
     onProgress?: (progress: number, step: string) => void
   ): Promise<string> {
-    const outputPath = `${(FileSystem as any).documentDirectory}exports/BlitzCut_${Date.now()}.mp4`;
+    const exportsDir = `${documentDirectory || ''}exports/`;
+    const dirInfo = await FileSystem.getInfoAsync(exportsDir);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(exportsDir, { intermediates: true });
+    }
+
+    const outputPath = `${exportsDir}BlitzCut_${Date.now()}.mp4`;
     onProgress?.(0.1, 'Preparing export...');
 
     // Build command parts

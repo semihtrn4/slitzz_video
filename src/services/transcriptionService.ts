@@ -1,10 +1,11 @@
 import * as FileSystem from 'expo-file-system';
+const documentDirectory = (FileSystem as any).documentDirectory;
+const cacheDirectory = (FileSystem as any).cacheDirectory;
 import type { SubtitleSegment, WordTimestamp } from '../types';
 
 const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin';
-const FS = FileSystem as any;
-const MODEL_PATH = (FS.documentDirectory || '') + 'models/ggml-tiny.bin';
-const MODEL_DIR = (FS.documentDirectory || '') + 'models/';
+const MODEL_DIR = (documentDirectory || '') + 'models/';
+const MODEL_PATH = MODEL_DIR + 'ggml-tiny.bin';
 
 export class TranscriptionService {
   private static instance: TranscriptionService;

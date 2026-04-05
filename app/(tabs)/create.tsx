@@ -10,7 +10,9 @@ import {
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import { File, Directory, Paths } from 'expo-file-system';
+import * as FileSystem from 'expo-file-system';
+const documentDirectory = (FileSystem as any).documentDirectory;
+const cacheDirectory = (FileSystem as any).cacheDirectory;
 import {
   Image as ImageIcon,
   FileUp,
@@ -49,13 +51,13 @@ export default function CreateScreen() {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        const fileInfo = new File(asset.uri).info();
+        const fileInfo = await FileSystem.getInfoAsync(asset.uri);
         
         setSelectedVideo({
           uri: asset.uri,
           name: asset.fileName || 'video.mp4',
           duration: asset.duration || 0,
-          size: fileInfo?.size || 0,
+          size: fileInfo.exists ? fileInfo.size : 0,
         });
       }
     } catch (error) {
@@ -73,8 +75,7 @@ export default function CreateScreen() {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        const file = new File(asset.uri);
-        const fileInfo = file.info();
+        const fileInfo = await FileSystem.getInfoAsync(asset.uri);
         
         // Get video duration using FFmpeg
         const videoInfo = await ffmpegService.getVideoInfo(asset.uri);
@@ -83,7 +84,7 @@ export default function CreateScreen() {
           uri: asset.uri,
           name: asset.name,
           duration: videoInfo.duration,
-          size: fileInfo?.size || 0,
+          size: fileInfo.exists ? fileInfo.size : 0,
         });
       }
     } catch (error) {
@@ -118,24 +119,27 @@ export default function CreateScreen() {
     setIsLoading(true);
     try {
       // Copy video to app directory
-      const projectsDir = new Directory(Paths.document, 'projects');
-      if (!projectsDir.exists) {
-        projectsDir.create();
+      const projectsDir = `${documentDirectory || ''}projects/`;
+      const dirInfo = await FileSystem.getInfoAsync(projectsDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(projectsDir, { intermediates: true });
       }
 
       const fileName = `project_${Date.now()}.mp4`;
-      const destFile = new File(projectsDir, fileName);
+      const destUri = `${projectsDir}${fileName}`;
       
-      const sourceFile = new File(selectedVideo.uri);
-      sourceFile.copy(destFile);
+      await FileSystem.copyAsync({
+        from: selectedVideo.uri,
+        to: destUri
+      });
 
       // Generate thumbnail
-      const thumbnailPath = await ffmpegService.generateThumbnail(destFile.uri, 0);
+      const thumbnailPath = await ffmpegService.generateThumbnail(destUri, 0);
 
       // Create project
       const projectId = addProject({
         name: selectedVideo.name.replace(/\.[^/.]+$/, ''),
-        originalVideoPath: destFile.uri,
+        originalVideoPath: destUri,
         thumbnailPath,
         duration: selectedVideo.duration,
         status: 'draft',
