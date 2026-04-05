@@ -5,11 +5,11 @@ const { withProjectBuildGradle } = require('@expo/config-plugins');
  * Uses subprojects + plugins.withId to avoid afterEvaluate Gradle 8+ conflict.
  */
 const withAndroidNamespace = (config) => {
-  return withProjectBuildGradle(config, (config) => {
-    if (config.modResults.language === 'groovy') {
-      config.modResults.contents = patchBuildGradle(config.modResults.contents);
+  return withProjectBuildGradle(config, (cfg) => {
+    if (cfg.modResults.language === 'groovy') {
+      cfg.modResults.contents = patchBuildGradle(cfg.modResults.contents);
     }
-    return config;
+    return cfg;
   });
 };
 

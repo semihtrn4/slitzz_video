@@ -75,7 +75,7 @@ const patchLibraryGradle = (projectRoot) => {
     const searchPattern = /implementation 'com\.arthenica:ffmpeg-kit-' \+ safePackageName\(safeExtGet\('ffmpegKitPackage', 'https'\)\) \+ ':' \+ safePackageVersion\(safeExtGet\('ffmpegKitPackage', 'https'\)\)/g;
     const replacement = "// patched by Expo Plugin\n  implementation(name: 'ffmpeg-kit-full-gpl', ext: 'aar')";
 
-    if (contents.includes(searchPattern) || contents.match(searchPattern)) {
+    if (contents.match(searchPattern)) {
       console.log('[withFFmpegKit] Patching library build.gradle...');
       contents = contents.replace(searchPattern, replacement);
       fs.writeFileSync(target, contents);
