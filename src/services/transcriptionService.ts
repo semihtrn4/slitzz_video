@@ -103,33 +103,27 @@ export class TranscriptionService {
 
     onProgress?.('Complete');
 
-    return transcribeResult.segments.map(
-      (
-        seg: { t0: number; t1: number; text: string; words?: Array<{ word: string; t0: number; t1: number }> },
-        index: number
-      ): SubtitleSegment => {
-        const subtitleSegment: SubtitleSegment = {
-          id: `seg_${index}`,
-          // whisper.rn timestamps are in centiseconds
-          start: seg.t0 / 100,
-          end: seg.t1 / 100,
-          text: seg.text.trim(),
-        };
+    const segments: SubtitleSegment[] = [];
+    transcribeResult.segments.forEach((seg: any, index: number) => {
+      const text = seg.text.trim();
+      // Whisper bazen sadece müzik [MUSIC] veya sessizlik [SILENCE] döndürür, bunları filtreleyelim
+      if (!text || text.match(/^\[.*\]$/)) return;
+      
+      segments.push({
+        id: `seg_${index}`,
+        // whisper.rn timestamps are in centoseconds
+        start: seg.t0 / 100,
+        end: seg.t1 / 100,
+        text,
+        words: seg.words?.map((w: any) => ({
+          word: w.word,
+          start: w.t0 / 100,
+          end: w.t1 / 100,
+        }))
+      });
+    });
 
-        // Populate words for karaoke mode if word-level timestamps are available
-        if (seg.words && seg.words.length > 0) {
-          subtitleSegment.words = seg.words.map(
-            (w): WordTimestamp => ({
-              word: w.word,
-              start: w.t0 / 100,
-              end: w.t1 / 100,
-            })
-          );
-        }
-
-        return subtitleSegment;
-      }
-    );
+    return segments;
   }
 
   // Generate SRT file from segments (Requirements: 6.4, 6.5)

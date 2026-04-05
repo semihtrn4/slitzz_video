@@ -62,6 +62,7 @@ export interface SubtitleStyle {
 export interface ExportConfig {
   videoPath: string;
   platform: 'tiktok' | 'reels' | 'shorts' | 'custom';
+  aspectRatio?: AspectRatio;
   resolution: '720p' | '1080p' | '4k';
   fps: 30 | 60;
   includeSubtitles: boolean;

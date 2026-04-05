@@ -106,14 +106,13 @@ export class FFmpegService {
     keepSegments.forEach((seg, i) => {
       filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
       filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
-      vStreams += `[v${i}]`;
-      aStreams += `[a${i}]`;
+      vStreams += `[v${i}][a${i}]`;
     });
 
-    filter += `${vStreams}${aStreams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
+    filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
 
     const session = await FFmpegKit.execute(
-      `-i "${videoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -preset superfast -y "${outputPath}"`
+      `-i "${videoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${outputPath}"`
     );
 
     if (ReturnCode.isSuccess(await session.getReturnCode())) {
@@ -140,28 +139,86 @@ export class FFmpegService {
     const outputPath = `${exportsDir}BlitzCut_${Date.now()}.mp4`;
     onProgress?.(0.1, 'Preparing export...');
 
-    // Build command parts
-    let filters = [];
+    // Build filter complex
+    let filterComplex = '';
+    let videoStream = '[0:v]';
+    let audioStream = '[0:a]';
     
-    // 1. Scale & Aspect Ratio
+    // 1. Scale & Aspect Ratio & Resolution
     const is4K = config.resolution.toUpperCase() === '4K';
-    const [width, height] = is4K ? [2160, 3840] : [1080, 1920];
-    filters.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`);
+    let baseWidth = 1080;
+    let baseHeight = 1920;
 
-    // 2. Subtitles (if SRT exists)
+    if (config.aspectRatio) {
+      switch (config.aspectRatio) {
+        case '1:1': baseWidth = 1080; baseHeight = 1080; break;
+        case '4:5': baseWidth = 1080; baseHeight = 1350; break;
+        case '16:9': baseWidth = 1920; baseHeight = 1080; break;
+        case '9:16': baseWidth = 1080; baseHeight = 1920; break;
+      }
+    }
+
+    const width = is4K ? baseWidth * 2 : baseWidth;
+    const height = is4K ? baseHeight * 2 : baseHeight;
+
+    filterComplex += `${videoStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[scaled]; `;
+    videoStream = '[scaled]';
+
+    // 2. Adjustments (Brightness/Contrast) - if needed
+    // filterComplex += `${videoStream}eq=brightness=0:contrast=1[adjusted]; `;
+    // videoStream = '[adjusted]';
+
+    // 3. Speed (Video)
+    if (config.speed && config.speed !== 1) {
+      filterComplex += `${videoStream}setpts=${(1/config.speed).toFixed(2)}*PTS[speedv]; `;
+      videoStream = '[speedv]';
+      filterComplex += `${audioStream}atempo=${config.speed.toFixed(2)}[speeda]; `;
+      audioStream = '[speeda]';
+    }
+
+    // 4. Subtitles (if SRT exists)
     if (config.srtPath && config.includeSubtitles) {
-      // ffmpeg expects absolute path with escaped colons for subtitles filter on some platforms
       const srtPathEscaped = config.srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      filters.push(`subtitles='${srtPathEscaped}'`);
+      filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[subbed]; `;
+      videoStream = '[subbed]';
     }
 
-    // 3. Watermark (if free plan)
+    // 5. Watermark (if free plan)
     if (!isPremium && config.watermark) {
-      // Draw text watermark for mock/simpler implementation
-      filters.push(`drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5`);
+      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[watermarked]; `;
+      videoStream = '[watermarked]';
     }
 
-    const filterString = filters.join(',');
+    // 6. Audio Volume & Background Music
+    let finalAudio = '[outa]';
+    let audioFilters = '';
+    
+    // Volume for original audio
+    const vol = (config.audioVolume / 100).toFixed(2);
+    audioFilters += `${audioStream}volume=${vol}[vol_orig]; `;
+    
+    if (config.musicPath && config.musicVolume !== undefined) {
+      const mVol = (config.musicVolume / 100).toFixed(2);
+      // Mix background music (looping not trivial in one command, but amix handles it)
+      // Input 1 is the music track
+      audioFilters += `[1:a]volume=${mVol}[vol_music]; `;
+      audioFilters += `[vol_orig][vol_music]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
+    } else {
+      audioFilters += `[vol_orig]copy[outa]`;
+    }
+    
+    filterComplex += audioFilters;
+
+    const command = [
+      `-i "${config.videoPath}"`,
+      config.musicPath ? `-i "${config.musicPath}"` : '',
+      `-filter_complex "${filterComplex}"`,
+      `-map "${videoStream}"`,
+      `-map "[outa]"`,
+      `-c:v libx264 -preset fast`,
+      config.resolution === '4k' ? '-b:v 10M' : '-b:v 5M',
+      `-y "${outputPath}"`
+    ].filter(Boolean).join(' ');
     
     // Progress tracking via statistics
     FFmpegKitConfig.enableStatisticsCallback((stats) => {
@@ -169,9 +226,7 @@ export class FFmpegService {
       onProgress?.(0.5, 'Encoding...');
     });
 
-    const session = await FFmpegKit.execute(
-      `-i "${config.videoPath}" -vf "${filterString}" -c:v libx264 -preset fast -y "${outputPath}"`
-    );
+    const session = await FFmpegKit.execute(command);
 
     if (ReturnCode.isSuccess(await session.getReturnCode())) {
       onProgress?.(1, 'Complete');

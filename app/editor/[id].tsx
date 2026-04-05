@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   Upload,
   Lock,
+  Check,
 } from 'lucide-react-native';
 
 import { Colors } from '@/src/constants/colors';
@@ -114,6 +115,7 @@ export default function EditorScreen() {
     const config = {
       videoPath: project.processedVideoPath || project.originalVideoPath,
       platform: 'tiktok' as const,
+      aspectRatio: adjustSettings.aspectRatio,
       resolution: '1080p' as const,
       fps: 30 as const,
       includeSubtitles: true,
@@ -240,12 +242,19 @@ export default function EditorScreen() {
                     ]}
                     onPress={() => toggleSilenceExcluded(index)}
                   >
-                    <Text style={styles.segmentTime}>
-                      {formatTime(segment.start)} - {formatTime(segment.end)}
-                    </Text>
-                    <Text style={styles.segmentDuration}>
-                      ({segment.duration.toFixed(2)}s)
-                    </Text>
+                    <View style={styles.segmentInfo}>
+                      <Text style={styles.segmentTime}>
+                        {formatTime(segment.start)} - {formatTime(segment.end)}
+                      </Text>
+                      <Text style={styles.segmentDuration}>
+                        ({segment.duration.toFixed(2)}s)
+                      </Text>
+                    </View>
+                    {!segment.excluded && (
+                      <View style={styles.checkIcon}>
+                        <Check size={18} color="#4ADE80" />
+                      </View>
+                    )}
                   </TouchableOpacity>
                 ))}
                 
@@ -652,6 +661,12 @@ const styles = StyleSheet.create({
   segmentDuration: {
     fontSize: 13,
     color: textSecondary,
+  },
+  segmentInfo: {
+    flex: 1,
+  },
+  checkIcon: {
+    marginLeft: 12,
   },
   languageList: {
     flexDirection: 'row',
