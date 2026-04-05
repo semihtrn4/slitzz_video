@@ -1,0 +1,52 @@
+name: EAS Build Local (Free)
+on:
+  workflow_dispatch: # Manuel tetikleme imkanı
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🏗 Checkout repo
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 🏗 Setup Expo & EAS
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: 📦 Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: 📱 Build Android (Local on GitHub)
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: |
+          npx eas-cli build --local --platform android --profile preview --non-interactive
+
+      - name: 📤 Upload Build Result (APK/AAB)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: |
+            *.apk
+            *.aab
+            android/build/outputs/apk/release/*.apk
