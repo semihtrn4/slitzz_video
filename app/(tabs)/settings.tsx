@@ -10,7 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, Paths } from 'expo-file-system';
 import Constants from 'expo-constants';
 import * as WebBrowser from 'expo-web-browser';
 import {
@@ -26,7 +26,6 @@ import {
   Shield,
   FileText,
   HelpCircle,
-  LogOut,
   Download,
 } from 'lucide-react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
@@ -65,18 +64,20 @@ export default function SettingsScreen() {
       try {
         const cacheDir = new Directory(Paths.cache);
         if (cacheDir.exists) {
-          // Tüm dosyaların boyutunu topla
+          // list() her entry için size bilgisi olmayabilir, güvenli toplama
           let totalBytes = 0;
-          const files = cacheDir.list();
-          for (const entry of files) {
-            if (entry instanceof File) {
-              totalBytes += entry.size ?? 0;
+          const entries = cacheDir.list();
+          for (const entry of entries) {
+            try {
+              const s = (entry as any).size;
+              if (typeof s === 'number') totalBytes += s;
+            } catch {
+              // boyut alınamazsa atla
             }
           }
           setStorageUsed(Math.round(totalBytes / (1024 * 1024)));
         }
       } catch {
-        // Hesaplanamadıysa 0 göster
         setStorageUsed(0);
       }
     };

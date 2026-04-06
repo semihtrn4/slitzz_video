@@ -9,12 +9,12 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import Animated, { FadeIn, runOnJS } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { ChevronLeft, Upload, Lock as LockIcon, Check } from 'lucide-react-native';
-import { useWindowDimensions } from 'react-native';
 
 import { Colors } from '@/src/constants/colors';
 import { SUBTITLE_PRESETS, LANGUAGES, SPEED_OPTIONS, ASPECT_RATIOS, BACKGROUND_TRACKS } from '@/src/constants/subtitleStyles';
@@ -63,7 +63,6 @@ export default function EditorScreen() {
     isProcessing,
     processingProgress,
     processingStep,
-    setProcessingStep,
   } = useEditorStore();
 
   const [activeTab, setActiveTab] = useState<EditorTab>('silence');
