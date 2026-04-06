@@ -38,7 +38,8 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.MODIFY_AUDIO_SETTINGS"
-      ]    },
+      ]
+    },
     "web": {
       "favicon": "./assets/images/favicon.png"
     },

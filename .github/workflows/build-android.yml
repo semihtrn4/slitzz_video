@@ -1,6 +1,7 @@
-name: EAS Build Local (Free)
+name: Android APK Build
+
 on:
-  workflow_dispatch: # Manuel tetikleme imkanı
+  workflow_dispatch:
   push:
     branches:
       - master
@@ -10,44 +11,50 @@ jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
+
     steps:
       - name: 🏗 Checkout repo
         uses: actions/checkout@v4
 
-      - name: ⚙️ Setup Node
+      - name: ⚙️ Setup Node 20
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
           cache: 'npm'
 
-      - name: ☕ Setup Java
+      - name: ☕ Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 🏗 Setup Expo & EAS
-        uses: expo/expo-github-action@v8
-        with:
-          expo-version: latest
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
+      - name: 🤖 Setup Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: 📦 Install dependencies
         run: npm install --legacy-peer-deps
 
-      - name: 📱 Build Android (Local on GitHub)
+      - name: 🔧 Install Expo CLI
+        run: npm install -g @expo/cli@latest
+
+      - name: 🏗 Expo Prebuild (generate android folder)
+        run: npx expo prebuild --platform android --clean --no-install
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
-          EAS_LOCAL_BUILD_SKIP_DOCKER: 1
-        run: |
-          npx eas-cli build --local --platform android --profile preview --non-interactive
 
-      - name: 📤 Upload Build Result (APK/AAB)
+      - name: 🔑 Make Gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: 🏗 Build APK (Release - debug signed for testing)
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m"
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+      - name: 📤 Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-build
-          path: |
-            *.apk
-            *.aab
-            android/build/outputs/apk/release/*.apk
+          name: android-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
