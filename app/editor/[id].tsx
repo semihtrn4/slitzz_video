@@ -18,6 +18,8 @@ import {
   Lock,
   Check,
 } from 'lucide-react-native';
+import * as MediaLibrary from 'expo-media-library';
+import * as Haptics from 'expo-haptics';
 
 import { Colors } from '@/src/constants/colors';
 import { SUBTITLE_PRESETS, LANGUAGES, SPEED_OPTIONS, ASPECT_RATIOS, BACKGROUND_TRACKS } from '@/src/constants/subtitleStyles';
@@ -64,6 +66,7 @@ export default function EditorScreen() {
     isProcessing,
     processingProgress,
     processingStep,
+    setProcessingStep,
   } = useEditorStore();
 
   const [activeTab, setActiveTab] = useState<EditorTab>('silence');
@@ -133,9 +136,12 @@ export default function EditorScreen() {
     if (outputPath) {
       setShowExportSheet(false);
       Alert.alert(
-        'Export Complete!',
-        'Your video has been exported successfully.',
-        [{ text: 'Awesome!' }]
+        'Videon Hazır!',
+        'Videon başarıyla oluşturuldu ve galerine kaydedildi.',
+        [{ 
+          text: 'Harika!', 
+          onPress: () => router.replace('/(tabs)') // Navigate back to home
+        }]
       );
     }
   };
@@ -578,7 +584,7 @@ export default function EditorScreen() {
             </View>
 
             <Button
-              title="Export Video"
+              title="Save to Gallery"
               onPress={handleExport}
               size="large"
               style={[styles.exportButtonLarge, isTrimInvalid ? styles.exportButtonDisabled : undefined]}

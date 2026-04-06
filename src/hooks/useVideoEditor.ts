@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { ImpactFeedbackStyle, NotificationFeedbackType } from 'expo-haptics';
 import { useRouter } from 'expo-router';
 
+import * as MediaLibrary from 'expo-media-library';
 import { useEditorStore } from '../stores/editorStore';
 import { useProjectStore } from '../stores/projectStore';
 import { useSubscriptionStore } from '../stores/subscriptionStore';
@@ -191,7 +192,17 @@ export function useVideoEditor(project: Project) {
         status: 'exported',
       });
 
-      setProcessingStep('complete');
+      // --- Save to Gallery (Camera Roll) ---
+      setProcessingStep('saving' as any);
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status === 'granted') {
+        await MediaLibrary.saveToLibraryAsync(outputPath);
+        console.log('[MediaLibrary] Saved to gallery successfully');
+      } else {
+        console.warn('[MediaLibrary] Permission denied, skipping gallery save');
+      }
+
+      setProcessingStep('complete' as any);
       haptics.notification(NotificationFeedbackType.Success);
       return outputPath;
     } catch (error: any) {

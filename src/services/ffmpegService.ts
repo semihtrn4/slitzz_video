@@ -248,31 +248,49 @@ export class FFmpegService {
       filterComplex += `[vol_orig]anull[outa]`;
     }
 
-    const command = [
-      `-i "${config.videoPath}"`,
-      config.musicPath ? `-stream_loop -1 -i "${config.musicPath}"` : '',
-      `-filter_complex "${filterComplex}"`,
-      `-map "${videoStream}"`,
-      `-map "[outa]"`,
-      `-c:v libx264 -preset fast`,
-      config.resolution === '4k' ? '-b:v 10M' : '-b:v 5M',
-      `-shortest`, // Ensure video stops when the visual stream ends
-      `-y "${outputPath}"`
-    ].filter(Boolean).join(' ');
+    // --- FFmpeg Command with Arguments (Safer than string) ---
+    const args = [
+      '-i', config.videoPath,
+    ];
+
+    if (config.musicPath) {
+      args.push('-stream_loop', '-1', '-i', config.musicPath);
+    }
+
+    args.push(
+      '-filter_complex', filterComplex,
+      '-map', videoStream,
+      '-map', '[outa]',
+      '-c:v', 'libx264',
+      '-preset', 'fast'
+    );
+
+    if (config.resolution === '4k') {
+      args.push('-b:v', '10M');
+    } else {
+      args.push('-b:v', '5M');
+    }
+
+    args.push('-shortest', '-y', outputPath);
     
-    // Progress tracking via statistics
+    console.log('[FFmpeg] Exporting with arguments:', JSON.stringify(args));
+
+    // Progress tracking
     FFmpegKitConfig.enableStatisticsCallback((stats) => {
-      // In a real app, we'd compare stats.getTime() with total duration
       onProgress?.(0.5, 'Encoding...');
     });
 
-    const session = await FFmpegKit.execute(command);
+    const session = await FFmpegKit.executeWithArguments(args);
+    const returnCode = await session.getReturnCode();
 
-    if (ReturnCode.isSuccess(await session.getReturnCode())) {
+    if (ReturnCode.isSuccess(returnCode)) {
       onProgress?.(1, 'Complete');
       return outputPath;
     } else {
-      throw new Error('FFmpeg export failed');
+      const logs = await session.getLogs();
+      const failMessage = logs.length > 0 ? logs[logs.length - 1].getMessage() : 'Unknown FFmpeg error';
+      console.error('[FFmpeg] Export failed:', failMessage);
+      throw new Error(`FFmpeg export failed: ${failMessage}`);
     }
   }
 
