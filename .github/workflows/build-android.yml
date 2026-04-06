@@ -28,8 +28,14 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 🤖 Setup Android SDK
+      - name: 🤖 Setup Android SDK + NDK
         uses: android-actions/setup-android@v3
+
+      - name: 🔧 Install NDK
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.1.12297006" --sdk_root=$ANDROID_HOME
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
 
       - name: 📦 Install dependencies
         run: npm install --legacy-peer-deps
@@ -37,7 +43,7 @@ jobs:
       - name: 🔧 Install Expo CLI
         run: npm install -g @expo/cli@latest
 
-      - name: 🏗 Expo Prebuild (generate android folder)
+      - name: 🏗 Expo Prebuild
         run: npx expo prebuild --platform android --clean --no-install
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
@@ -45,16 +51,22 @@ jobs:
       - name: 🔑 Make Gradlew executable
         run: chmod +x android/gradlew
 
-      - name: 🏗 Build APK (Release - debug signed for testing)
+      - name: 🏗 Build Debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m"
+        run: |
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
+            -Dorg.gradle.parallel=false
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
       - name: 📤 Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
+          name: android-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
