@@ -140,12 +140,7 @@ export default function HomeScreen() {
   const renderEmptyState = () => (
     <Animated.View entering={FadeIn} style={styles.emptyContainer}>
       <View style={styles.emptyIconContainer}>
-        {lottieError ? (
-          <Zap size={48} color={primary} />
-        ) : (
-          // FIX #20: Dış URL yerine local fallback — network yoksa icon göster
-          <Zap size={48} color={primary} />
-        )}
+        <Zap size={48} color={primary} />
       </View>
       <Text style={styles.emptyTitle}>No Projects Yet</Text>
       <Text style={styles.emptySubtitle}>
@@ -367,10 +362,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
-  },
-  lottieAnimation: {
-    width: 100,
-    height: 100,
   },
   emptyTitle: {
     fontSize: 24,
