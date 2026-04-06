@@ -31,11 +31,10 @@ jobs:
       - name: 🤖 Setup Android SDK + NDK
         uses: android-actions/setup-android@v3
 
-      - name: 🔧 Install NDK
+      - name: 🔧 Install NDK 27
         run: |
           echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.1.12297006" --sdk_root=$ANDROID_HOME
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> $GITHUB_ENV
 
       - name: 📦 Install dependencies
         run: npm install --legacy-peer-deps
@@ -43,10 +42,17 @@ jobs:
       - name: 🔧 Install Expo CLI
         run: npm install -g @expo/cli@latest
 
-      - name: 🏗 Expo Prebuild
+      - name: 🏗 Expo Prebuild (generates android/ + applies plugins)
         run: npx expo prebuild --platform android --clean --no-install
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: 🔍 Verify ffmpeg-kit patch applied
+        run: |
+          echo "=== ffmpeg-kit build.gradle ==="
+          cat node_modules/ffmpeg-kit-react-native/android/build.gradle | grep -A5 "dependencies {"
+          echo "=== android/libs ==="
+          ls -lh android/libs/ || echo "libs dir empty or missing"
 
       - name: 🔑 Make Gradlew executable
         run: chmod +x android/gradlew
