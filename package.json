@@ -1,20 +1,19 @@
 {
-  "name": "expo-app",
+  "name": "slitzcut",
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
-    "start": "bunx rork start -p v1mtw13psu2nv6ka9q9kx --tunnel",
-    "start-web": "bunx rork start -p v1mtw13psu2nv6ka9q9kx --web --tunnel",
-    "start-web-dev": "DEBUG=expo* bunx rork start -p v1mtw13psu2nv6ka9q9kx --web --tunnel",
-    "lint": "expo lint",
+    "start": "expo start",
+    "start:tunnel": "expo start --tunnel",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "lint": "expo lint"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@nkzw/create-context-hook": "^1.1.0",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@rork-ai/toolkit-sdk": "^0.2.51",
     "@shopify/react-native-skia": "2.2.12",
     "@stardazed/streams-text-encoding": "^1.0.2",
     "@tanstack/react-query": "^5.83.0",

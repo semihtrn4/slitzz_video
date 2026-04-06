@@ -47,7 +47,7 @@
       [
         "expo-router",
         {
-          "origin": "https://rork.com/"
+          "origin": "https://slitzcut.app/"
         }
       ],
       "expo-font",
@@ -76,7 +76,7 @@
     },
     "extra": {
       "router": {
-        "origin": "https://rork.com/"
+        "origin": "https://slitzcut.app/"
       },
       "eas": {
         "projectId": "5632eb20-4db1-45ca-86c0-5797c26769ec"
