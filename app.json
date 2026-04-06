@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "app.rork.v1mtw13psu2nv6ka9q9kx",
+      "bundleIdentifier": "com.slitzcut.app",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Videolarınızı kamera rulosuna kaydetmek için",
         "NSMicrophoneUsageDescription": "Sesinizi yazıya dökmek ve transkripsiyon için mikrofon erişimi gereklidir.",
@@ -28,7 +28,7 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "app.rork.v1mtw13psu2nv6ka9q9kx",
+      "package": "com.slitzcut.app",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
@@ -38,8 +38,7 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.MODIFY_AUDIO_SETTINGS"
-      ]
-    },
+      ]    },
     "web": {
       "favicon": "./assets/images/favicon.png"
     },

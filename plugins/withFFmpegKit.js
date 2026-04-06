@@ -3,59 +3,55 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-/**
- * Bulletproof Fix for ffmpeg-kit-react-native v6.0 retirement.
- * 1. Downloads the AAR from a mirror using Node.js (before Gradle starts).
- * 2. Patches the node_modules directly to remove the dead Maven dependency.
- */
-
 const AAR_URL = 'https://github.com/NooruddinLakhani/ffmpeg-kit-full-gpl/releases/download/v1.0.0/ffmpeg-kit-full-gpl.aar';
+const AAR_FALLBACK_URL = 'https://github.com/arthenica/ffmpeg-kit/releases/download/v6.0/ffmpeg-kit-full-gpl-6.0-android.aar';
 
 const downloadFile = (url, dest) => {
   return new Promise((resolve, reject) => {
-    // Only download if doesn't exist or is empty
-    if (fs.existsSync(dest) && fs.statSync(dest).size > 0) {
-      console.log(`[withFFmpegKit] ${path.basename(dest)} already exists and is not empty.`);
+    if (fs.existsSync(dest) && fs.statSync(dest).size > 1000000) {
+      console.log(`[withFFmpegKit] AAR already cached (${fs.statSync(dest).size} bytes).`);
       return resolve();
     }
-    
+
     const dir = path.dirname(dest);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     console.log(`[withFFmpegKit] Downloading AAR from ${url}...`);
-    
-    const request = (targetUrl) => {
-      const protocol = targetUrl.startsWith('https') ? https : require('http');
+
+    const request = (targetUrl, redirectCount = 0) => {
+      if (redirectCount > 10) return reject(new Error('Too many redirects'));
+      const isHttps = targetUrl.startsWith('https');
+      const protocol = isHttps ? https : require('http');
+
       protocol.get(targetUrl, (response) => {
         const { statusCode } = response;
-        
-        // Handle Redirects
+
         if ([301, 302, 303, 307, 308].includes(statusCode)) {
           const redirectUrl = response.headers.location;
-          console.log(`[withFFmpegKit] Redirecting to ${redirectUrl}...`);
-          return request(new URL(redirectUrl, targetUrl).toString());
+          console.log(`[withFFmpegKit] Redirect -> ${redirectUrl}`);
+          response.resume();
+          return request(new URL(redirectUrl, targetUrl).toString(), redirectCount + 1);
         }
 
         if (statusCode !== 200) {
-          return reject(new Error(`Failed to download: Status Code ${statusCode}`));
+          response.resume();
+          return reject(new Error(`HTTP ${statusCode}`));
         }
 
         const file = fs.createWriteStream(dest);
         response.pipe(file);
-        
         file.on('finish', () => {
           file.close();
           const size = fs.statSync(dest).size;
-          if (size === 0) {
+          if (size < 1000000) {
             fs.unlinkSync(dest);
-            return reject(new Error('Downloaded file is empty (0 bytes).'));
+            return reject(new Error(`AAR too small: ${size} bytes`));
           }
-          console.log(`[withFFmpegKit] Download complete (${size} bytes).`);
+          console.log(`[withFFmpegKit] Download complete: ${size} bytes`);
           resolve();
         });
-
         file.on('error', (err) => {
-          fs.unlink(dest, () => {});
+          if (fs.existsSync(dest)) fs.unlinkSync(dest);
           reject(err);
         });
       }).on('error', (err) => {
@@ -70,55 +66,50 @@ const downloadFile = (url, dest) => {
 
 const patchLibraryGradle = (projectRoot) => {
   const target = path.join(projectRoot, 'node_modules/ffmpeg-kit-react-native/android/build.gradle');
-  if (fs.existsSync(target)) {
-    let contents = fs.readFileSync(target, 'utf8');
-    const searchPattern = /implementation 'com\.arthenica:ffmpeg-kit-' \+ safePackageName\(safeExtGet\('ffmpegKitPackage', 'https'\)\) \+ ':' \+ safePackageVersion\(safeExtGet\('ffmpegKitPackage', 'https'\)\)/g;
-    const replacement = "// patched by Expo Plugin\n  implementation(name: 'ffmpeg-kit-full-gpl', ext: 'aar')";
+  if (!fs.existsSync(target)) return;
 
-    if (contents.match(searchPattern)) {
-      console.log('[withFFmpegKit] Patching library build.gradle...');
-      contents = contents.replace(searchPattern, replacement);
-      fs.writeFileSync(target, contents);
-    }
+  let contents = fs.readFileSync(target, 'utf8');
+  // Remove retired maven dependency
+  const searchPattern = /implementation 'com\.arthenica:ffmpeg-kit-[^']+'/g;
+  if (contents.match(searchPattern)) {
+    console.log('[withFFmpegKit] Patching ffmpeg-kit build.gradle...');
+    contents = contents.replace(searchPattern, "// retired dep removed by plugin\n  implementation(name: 'ffmpeg-kit-full-gpl', ext: 'aar')");
+    fs.writeFileSync(target, contents);
   }
 };
 
 const withFFmpegKit = (config) => {
-  // Step 1: Patch project-level build.gradle — add flatDir repo
+  // Step 1: project-level build.gradle — flatDir repo
   config = withProjectBuildGradle(config, (cfg) => {
     let contents = cfg.modResults.contents;
     contents = contents.replace(/\/\/ BEGIN withFFmpegKit[\s\S]*?\/\/ END withFFmpegKit\n?/g, '');
 
-    const patch = `
+    if (!contents.includes('BEGIN withFFmpegKit')) {
+      contents = contents.replace(/ffmpegKitPackage\s*=\s*["'][^"']*["']/g, '// ffmpegKitPackage removed');
+      cfg.modResults.contents = contents + `
 // BEGIN withFFmpegKit
 allprojects {
     repositories {
-        flatDir {
-            dirs "$rootDir/libs"
-        }
+        flatDir { dirs "$rootDir/libs" }
     }
 }
 // END withFFmpegKit
 `;
-    if (!contents.includes('BEGIN withFFmpegKit')) {
-      contents = contents.replace(/ffmpegKitPackage\s*=\s*["'][^"']*["']/g, '// ffmpegKitPackage removed');
-      cfg.modResults.contents = contents + patch;
     }
     return cfg;
   });
 
-  // Step 2: Patch app-level build.gradle — add implementation (for safety)
+  // Step 2: app-level build.gradle
   config = withAppBuildGradle(config, (cfg) => {
     let contents = cfg.modResults.contents;
     contents = contents.replace(/\/\/ BEGIN withFFmpegKitApp[\s\S]*?\/\/ END withFFmpegKitApp\n?/g, '');
 
-    const patch = `
+    if (!contents.includes('BEGIN withFFmpegKitApp')) {
+      cfg.modResults.contents = contents + `
 // BEGIN withFFmpegKitApp
 android {
     repositories {
-        flatDir {
-            dirs "$rootDir/libs"
-        }
+        flatDir { dirs "$rootDir/libs" }
     }
 }
 dependencies {
@@ -127,13 +118,11 @@ dependencies {
 }
 // END withFFmpegKitApp
 `;
-    if (!contents.includes('BEGIN withFFmpegKitApp')) {
-      cfg.modResults.contents = contents + patch;
     }
     return cfg;
   });
 
-  // Step 3: Dangerous Mod to handle file download and node_modules patching (Node level)
+  // Step 3: Download AAR + patch node_modules
   config = withDangerousMod(config, [
     'android',
     async (cfg) => {
@@ -141,14 +130,17 @@ dependencies {
       const libsDir = path.join(projectRoot, 'android/libs');
       const aarPath = path.join(libsDir, 'ffmpeg-kit-full-gpl.aar');
 
-      // 1. Patch library directly
       patchLibraryGradle(projectRoot);
 
-      // 2. Download AAR
       try {
         await downloadFile(AAR_URL, aarPath);
       } catch (e) {
-        console.error('[withFFmpegKit] Failed to download AAR:', e);
+        console.warn('[withFFmpegKit] Primary URL failed, trying fallback:', e.message);
+        try {
+          await downloadFile(AAR_FALLBACK_URL, aarPath);
+        } catch (e2) {
+          console.error('[withFFmpegKit] Both URLs failed. Build may fail:', e2.message);
+        }
       }
 
       return cfg;
