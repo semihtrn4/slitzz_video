@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import * as MediaLibrary from 'expo-media-library';
 import { ToastContainer } from '@/src/components/ui/Toast';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -16,20 +15,17 @@ const queryClient = new QueryClient();
 
 function RootLayoutNav() {
   const router = useRouter();
-  const segments = useSegments();
   const [isReady, setIsReady] = useState(false);
-  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
 
   useEffect(() => {
     const checkOnboarding = async () => {
       try {
         const completed = await AsyncStorage.getItem('onboarding_completed');
-        setHasCompletedOnboarding(completed === 'true');
-        
-        // One-time permission request at startup
-        const { status } = await MediaLibrary.getPermissionsAsync();
-        if (status !== 'granted') {
-          await MediaLibrary.requestPermissionsAsync();
+        // We will just redirect appropriately based on this
+        if (completed !== 'true') {
+          router.replace('/onboarding');
+        } else {
+          router.replace('/(tabs)');
         }
       } catch (error) {
         console.error('Error during startup initialization:', error);
@@ -42,15 +38,9 @@ function RootLayoutNav() {
     void checkOnboarding();
   }, []);
 
-  useEffect(() => {
-    if (isReady && segments[0] === undefined) {
-      if (!hasCompletedOnboarding) {
-        router.replace('/onboarding');
-      } else {
-        router.replace('/(tabs)');
-      }
-    }
-  }, [isReady, hasCompletedOnboarding, segments, router]);
+  if (!isReady) {
+    return null;
+  }
 
   return (
     <Stack screenOptions={{ headerBackTitle: 'Back' }}>

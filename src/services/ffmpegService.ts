@@ -7,18 +7,30 @@ import type { SilenceSegment, TimeSegment, ExportConfig } from '../types';
 
 export class FFmpegService {
   private static instance: FFmpegService;
+  private logEnabled: boolean = false;
 
   static getInstance(): FFmpegService {
     if (!FFmpegService.instance) {
       FFmpegService.instance = new FFmpegService();
-      FFmpegKitConfig.enableLogCallback((log) => {
-        console.log(`[FFmpeg Log] ${log.getMessage()}`);
-      });
     }
     return FFmpegService.instance;
   }
 
+  private async ensureLogCallback() {
+    if (!this.logEnabled) {
+      this.logEnabled = true;
+      try {
+        FFmpegKitConfig.enableLogCallback((log) => {
+          console.log(`[FFmpeg Log] ${log.getMessage()}`);
+        });
+      } catch (e) {
+        console.warn('Failed to enable FFmpeg logging', e);
+      }
+    }
+  }
+
   async extractAudio(videoPath: string, forWhisper: boolean = false): Promise<string> {
+    await this.ensureLogCallback();
     const ext = forWhisper ? 'wav' : 'm4a';
     const audioPath = `${cacheDirectory || ''}extracted_audio_${Date.now()}.${ext}`;
     console.log('[FFmpeg] Extracting audio to:', audioPath);
@@ -42,6 +54,7 @@ export class FFmpegService {
   }
 
   async generateThumbnail(videoPath: string, timeSeconds: number): Promise<string> {
+    await this.ensureLogCallback();
     const thumbnailPath = `${cacheDirectory || ''}thumb_${Date.now()}.jpg`;
     console.log('[FFmpeg] Generating thumbnail at:', thumbnailPath);
 
@@ -62,6 +75,7 @@ export class FFmpegService {
     threshold: number = -30,
     minDuration: number = 0.5
   ): Promise<SilenceSegment[]> {
+    await this.ensureLogCallback();
     console.log('[FFmpeg] Detecting silences...');
 
     const session = await FFmpegKit.execute(
@@ -86,6 +100,7 @@ export class FFmpegService {
     keepSegments: TimeSegment[],
     padding: number = 100
   ): Promise<string> {
+    await this.ensureLogCallback();
     if (keepSegments.length === 0) return videoPath;
 
     const outputPath = `${cacheDirectory || ''}cut_${Date.now()}.mp4`;
@@ -138,6 +153,7 @@ export class FFmpegService {
     isPremium: boolean,
     onProgress?: (progress: number, step: string) => void
   ): Promise<string> {
+    await this.ensureLogCallback();
     const exportsDir = `${documentDirectory || ''}exports/`;
     const dirInfo = await FileSystem.getInfoAsync(exportsDir);
     if (!dirInfo.exists) {
@@ -287,6 +303,7 @@ export class FFmpegService {
     height: number;
     fps: number;
   }> {
+    await this.ensureLogCallback();
     const session = await FFmpegKit.execute(`-i "${videoPath}" -hide_banner`);
     // FIX #1: getVideoInfo de getLogs() kullanmalı
     const logs = await session.getLogs();
@@ -316,6 +333,7 @@ export class FFmpegService {
 
   // FIX #1: getLogs() ile stderr'i oku, getOutput() değil
   async checkHasAudio(videoPath: string): Promise<boolean> {
+    await this.ensureLogCallback();
     try {
       const session = await FFmpegKit.execute(`-i "${videoPath}" -hide_banner`);
       const logs = await session.getLogs();
