@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 const documentDirectory = (FileSystem as any).documentDirectory;
 const cacheDirectory = (FileSystem as any).cacheDirectory;
 import { silenceService } from './silenceService';
-import type { SilenceSegment, TimeSegment, SubtitleStyle, ExportConfig } from '../types';
+import type { SilenceSegment, TimeSegment, ExportConfig } from '../types';
 
 export class FFmpegService {
   private static instance: FFmpegService;
@@ -11,7 +11,6 @@ export class FFmpegService {
   static getInstance(): FFmpegService {
     if (!FFmpegService.instance) {
       FFmpegService.instance = new FFmpegService();
-      // Setup logging for debugging
       FFmpegKitConfig.enableLogCallback((log) => {
         console.log(`[FFmpeg Log] ${log.getMessage()}`);
       });
@@ -19,17 +18,13 @@ export class FFmpegService {
     return FFmpegService.instance;
   }
 
-  /**
-   * Extracts audio stream from video for processing (Whisper/Silence Detection)
-   */
   async extractAudio(videoPath: string, forWhisper: boolean = false): Promise<string> {
     const ext = forWhisper ? 'wav' : 'm4a';
     const audioPath = `${cacheDirectory || ''}extracted_audio_${Date.now()}.${ext}`;
     console.log('[FFmpeg] Extracting audio to:', audioPath);
-    
+
     let command = '';
     if (forWhisper) {
-      // 16kHz, mono, 16-bit PCM WAV (Standard for whisper.cpp/whisper.rn)
       command = `-i "${videoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${audioPath}"`;
     } else {
       command = `-i "${videoPath}" -vn -acodec copy -y "${audioPath}"`;
@@ -46,14 +41,10 @@ export class FFmpegService {
     }
   }
 
-  /**
-   * Generates a thumbnail for a video at a specific time
-   */
   async generateThumbnail(videoPath: string, timeSeconds: number): Promise<string> {
     const thumbnailPath = `${cacheDirectory || ''}thumb_${Date.now()}.jpg`;
     console.log('[FFmpeg] Generating thumbnail at:', thumbnailPath);
 
-    // -ss: seek to time, -i: input, -vframes 1: extract 1 frame
     const session = await FFmpegKit.execute(
       `-ss ${timeSeconds} -i "${videoPath}" -vframes 1 -q:v 2 -y "${thumbnailPath}"`
     );
@@ -66,35 +57,30 @@ export class FFmpegService {
     }
   }
 
-  /**
-   * Detects silences in an audio file using FFmpeg silencedetect filter
-   */
   async detectSilences(
     audioPath: string,
     threshold: number = -30,
     minDuration: number = 0.5
   ): Promise<SilenceSegment[]> {
     console.log('[FFmpeg] Detecting silences...');
-    
-    // -af silencedetect: audio filter for silence detection
-    // -f null -: output to null (we only need the stderr logs)
+
     const session = await FFmpegKit.execute(
       `-i "${audioPath}" -af silencedetect=n=${threshold}dB:d=${minDuration} -f null -`
     );
-    
-    const output = await session.getOutput();
+
+    // FIX #1 & #9: silencedetect çıktısı stderr'de gelir, getLogs() kullanılmalı
+    const logs = await session.getLogs();
+    const allOutput = logs.map((l) => l.getMessage()).join('\n');
     const returnCode = await session.getReturnCode();
 
-    if (ReturnCode.isSuccess(returnCode)) {
-      return silenceService.parseSilenceOutput(output);
+    // silencedetect -f null - komutu genellikle non-zero döner, output'a bakarak karar ver
+    if (ReturnCode.isSuccess(returnCode) || allOutput.includes('silencedetect')) {
+      return silenceService.parseSilenceOutput(allOutput);
     } else {
       throw new Error('FFmpeg silence detection failed');
     }
   }
 
-  /**
-   * Removes silent segments from video by creating a concat filter
-   */
   async removeSilences(
     videoPath: string,
     keepSegments: TimeSegment[],
@@ -105,34 +91,48 @@ export class FFmpegService {
     const outputPath = `${cacheDirectory || ''}cut_${Date.now()}.mp4`;
     console.log('[FFmpeg] Removing silences, generating:', outputPath);
 
-    // Building complex filter for trimming and concatenation
-    // Example: [0:v]trim=0:5,setpts=PTS-STARTPTS[v0]; [0:a]atrim=0:5,asetpts=PTS-STARTPTS[a0]; ... [v0][a0][v1][a1]concat=n=2:v=1:a=1[out]
+    // FIX #2: Ses akışı olup olmadığını kontrol et
+    const hasAudio = await this.checkHasAudio(videoPath);
+
     let filter = '';
     let vStreams = '';
-    let aStreams = '';
 
-    keepSegments.forEach((seg, i) => {
-      filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
-      filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
-      vStreams += `[v${i}][a${i}]`;
-    });
+    if (hasAudio) {
+      // Video + Audio concat
+      keepSegments.forEach((seg, i) => {
+        filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
+        filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
+        vStreams += `[v${i}][a${i}]`;
+      });
+      filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
 
-    filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
-
-    const session = await FFmpegKit.execute(
-      `-i "${videoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${outputPath}"`
-    );
-
-    if (ReturnCode.isSuccess(await session.getReturnCode())) {
-      return outputPath;
+      const session = await FFmpegKit.execute(
+        `-i "${videoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${outputPath}"`
+      );
+      if (ReturnCode.isSuccess(await session.getReturnCode())) {
+        return outputPath;
+      } else {
+        throw new Error('FFmpeg silence removal failed');
+      }
     } else {
-      throw new Error('FFmpeg silence removal failed');
+      // Sadece video (ses yok)
+      keepSegments.forEach((seg, i) => {
+        filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
+        vStreams += `[v${i}]`;
+      });
+      filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=0[v]`;
+
+      const session = await FFmpegKit.execute(
+        `-i "${videoPath}" -filter_complex "${filter}" -map "[v]" -c:v libx264 -preset superfast -an -y "${outputPath}"`
+      );
+      if (ReturnCode.isSuccess(await session.getReturnCode())) {
+        return outputPath;
+      } else {
+        throw new Error('FFmpeg silence removal (no audio) failed');
+      }
     }
   }
 
-  /**
-   * Final export with all settings (Subtitles, Watermark, Speed, etc.)
-   */
   async exportVideo(
     config: ExportConfig,
     isPremium: boolean,
@@ -147,11 +147,11 @@ export class FFmpegService {
     const outputPath = `${exportsDir}BlitzCut_${Date.now()}.mp4`;
     onProgress?.(0.1, 'Preparing export...');
 
-    // Build filter complex
     let filterComplex = '';
     let videoStream = '[0:v]';
     let audioStream = '[0:a]';
-    // --- Audio Initial Preparation ---
+
+    // FIX #1: checkHasAudio artık getLogs() kullanıyor (aşağıda)
     const hasAudio = await this.checkHasAudio(config.videoPath);
     console.log(`[FFmpeg] Video has audio: ${hasAudio}`);
 
@@ -162,9 +162,9 @@ export class FFmpegService {
       filterComplex += `[0:a]anull[a0]; `;
       audioStream = '[a0]';
     }
-    
-    // 1. Scale & Aspect Ratio & Resolution
-    const is4K = config.resolution.toUpperCase() === '4K';
+
+    // FIX #3: resolution karşılaştırması tutarlı hale getirildi (hep lowercase)
+    const is4K = config.resolution === '4k';
     let baseWidth = 1080;
     let baseHeight = 1920;
 
@@ -192,26 +192,16 @@ export class FFmpegService {
       audioStream = '[a1]';
     }
 
-    // 3. Adjustments (Brightness/Contrast) - if needed
-    // filterComplex += `${videoStream}eq=brightness=0:contrast=1[adjusted]; `;
-    // videoStream = '[adjusted]';
-
     if (config.speed && config.speed !== 1) {
-      filterComplex += `${videoStream}setpts=${(1/config.speed).toFixed(4)}*PTS[v3]; `;
+      filterComplex += `${videoStream}setpts=${(1 / config.speed).toFixed(4)}*PTS[v3]; `;
       videoStream = '[v3]';
-      
+
       let s = config.speed;
       let atempoFilter = '';
-      while (s > 2.0) {
-        atempoFilter += 'atempo=2.0,';
-        s /= 2.0;
-      }
-      while (s < 0.5) {
-        atempoFilter += 'atempo=0.5,';
-        s /= 0.5;
-      }
+      while (s > 2.0) { atempoFilter += 'atempo=2.0,'; s /= 2.0; }
+      while (s < 0.5) { atempoFilter += 'atempo=0.5,'; s *= 2.0; }
       atempoFilter += `atempo=${s.toFixed(3)}`;
-      
+
       filterComplex += `${audioStream}${atempoFilter}[a2]; `;
       audioStream = '[a2]';
     }
@@ -221,7 +211,7 @@ export class FFmpegService {
       filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[v4]; `;
       videoStream = '[v4]';
     }
-    
+
     if (!isPremium && config.watermark) {
       filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[v5]; `;
       videoStream = '[v5]';
@@ -229,20 +219,16 @@ export class FFmpegService {
 
     const finalVol = (config.audioVolume / 100).toFixed(2);
     filterComplex += `${audioStream}volume=${finalVol}[v_orig]; `;
-    
+
     if (config.musicPath && config.musicVolume !== undefined) {
       const mVol = (config.musicVolume / 100).toFixed(2);
       filterComplex += `[1:a]volume=${mVol}[v_music]; `;
-      // Use normalize=0 to prevent amix from automatically balancing volumes
       filterComplex += `[v_orig][v_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`;
     } else {
       filterComplex += `[v_orig]anull[outa]`;
     }
 
-    // --- FFmpeg Command with Arguments (Safer than string) ---
-    const args = [
-      '-i', config.videoPath,
-    ];
+    const args = ['-i', config.videoPath];
 
     if (config.musicPath) {
       args.push('-stream_loop', '-1', '-i', config.musicPath);
@@ -256,23 +242,33 @@ export class FFmpegService {
       '-preset', 'fast'
     );
 
-    if (config.resolution === '4k') {
-      args.push('-b:v', '10M');
-    } else {
-      args.push('-b:v', '5M');
-    }
-
+    // FIX #3: bitrate kontrolü is4K ile tutarlı
+    args.push('-b:v', is4K ? '10M' : '5M');
     args.push('-shortest', '-y', outputPath);
-    
+
     console.log('[FFmpeg] Exporting with arguments:', JSON.stringify(args));
 
-    // Progress tracking
+    // FIX #7: Her export öncesi önceki callback'i temizle, gerçek progress hesapla
+    FFmpegKitConfig.enableStatisticsCallback(null as any);
+
+    // Video süresini tahmin et (trim varsa kısalt)
+    const estimatedDuration = config.trimEnd
+      ? (config.trimEnd - (config.trimStart || 0))
+      : 999;
+
     FFmpegKitConfig.enableStatisticsCallback((stats) => {
-      onProgress?.(0.5, 'Encoding...');
+      const timeMs = stats.getTime(); // işlenen süre ms
+      if (timeMs > 0 && estimatedDuration > 0) {
+        const progress = Math.min(0.9, (timeMs / 1000) / estimatedDuration);
+        onProgress?.(0.1 + progress * 0.8, 'Encoding...');
+      }
     });
 
     const session = await FFmpegKit.executeWithArguments(args);
     const returnCode = await session.getReturnCode();
+
+    // Callback'i temizle
+    FFmpegKitConfig.enableStatisticsCallback(null as any);
 
     if (ReturnCode.isSuccess(returnCode)) {
       onProgress?.(1, 'Complete');
@@ -292,28 +288,38 @@ export class FFmpegService {
     fps: number;
   }> {
     const session = await FFmpegKit.execute(`-i "${videoPath}" -hide_banner`);
-    const output = await session.getOutput();
-    
-    // Parse duration from: Duration: 00:00:05.10, start: 0.000000, bitrate: 201 kb/s
-    const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2}).(\d{2})/);
+    // FIX #1: getVideoInfo de getLogs() kullanmalı
+    const logs = await session.getLogs();
+    const output = logs.map((l) => l.getMessage()).join('\n');
+
+    const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
     let duration = 0;
     if (durationMatch) {
-      duration = parseInt(durationMatch[1]) * 3600 +
-                 parseInt(durationMatch[2]) * 60 +
-                 parseInt(durationMatch[3]) +
-                 parseInt(durationMatch[4]) / 100;
+      duration =
+        parseInt(durationMatch[1]) * 3600 +
+        parseInt(durationMatch[2]) * 60 +
+        parseInt(durationMatch[3]) +
+        parseInt(durationMatch[4]) / 100;
     }
 
-    return { duration, width: 1080, height: 1920, fps: 30 };
+    // Parse resolution
+    const resMatch = output.match(/(\d{2,4})x(\d{2,4})/);
+    const w = resMatch ? parseInt(resMatch[1]) : 1080;
+    const h = resMatch ? parseInt(resMatch[2]) : 1920;
+
+    // Parse fps
+    const fpsMatch = output.match(/(\d+(?:\.\d+)?) fps/);
+    const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
+
+    return { duration, width: w, height: h, fps };
   }
 
-  /**
-   * Checks if a video file has an audio stream
-   */
+  // FIX #1: getLogs() ile stderr'i oku, getOutput() değil
   async checkHasAudio(videoPath: string): Promise<boolean> {
     try {
       const session = await FFmpegKit.execute(`-i "${videoPath}" -hide_banner`);
-      const output = await session.getOutput();
+      const logs = await session.getLogs();
+      const output = logs.map((l) => l.getMessage()).join('\n');
       return output.includes('Audio:');
     } catch {
       return false;

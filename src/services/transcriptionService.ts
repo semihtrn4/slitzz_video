@@ -1,7 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 const documentDirectory = (FileSystem as any).documentDirectory;
 const cacheDirectory = (FileSystem as any).cacheDirectory;
-import type { SubtitleSegment, WordTimestamp } from '../types';
+import type { SubtitleSegment } from '../types';
 
 const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
 const MODEL_DIR = (documentDirectory || '') + 'models/';

@@ -10,7 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Directory, Paths } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import Constants from 'expo-constants';
 import * as WebBrowser from 'expo-web-browser';
 import {
@@ -50,7 +50,7 @@ export default function SettingsScreen() {
   const hasPremium = isUserPremium();
   const { hapticEnabled, setHapticEnabled, autoDownloadModel, setAutoDownloadModel, defaultResolution, setDefaultResolution, defaultAspectRatio, setDefaultAspectRatio } = useSettingsStore();
 
-  const [storageUsed, setStorageUsed] = useState(124);
+  const [storageUsed, setStorageUsed] = useState(0);
   const [storageTotal] = useState(512);
   const [modelDownloaded, setModelDownloaded] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
@@ -59,6 +59,28 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     transcriptionService.isModelDownloaded().then(setModelDownloaded);
+
+    // FIX #16: Gerçek cache boyutunu hesapla
+    const calcStorage = async () => {
+      try {
+        const cacheDir = new Directory(Paths.cache);
+        if (cacheDir.exists) {
+          // Tüm dosyaların boyutunu topla
+          let totalBytes = 0;
+          const files = cacheDir.list();
+          for (const entry of files) {
+            if (entry instanceof File) {
+              totalBytes += entry.size ?? 0;
+            }
+          }
+          setStorageUsed(Math.round(totalBytes / (1024 * 1024)));
+        }
+      } catch {
+        // Hesaplanamadıysa 0 göster
+        setStorageUsed(0);
+      }
+    };
+    void calcStorage();
   }, []);
 
   const handleDownloadModel = async () => {

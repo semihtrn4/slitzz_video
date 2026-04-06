@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, PanResponder } from 'react-native';
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { Colors } from '@/src/constants/colors';
 
@@ -24,7 +24,14 @@ export function Slider({
 }: SliderProps) {
   const trackWidth = useRef(0);
   const position = useSharedValue(0);
-  const progress = (value - minimumValue) / (maximumValue - minimumValue);
+
+  // FIX #7: value prop dışarıdan değiştiğinde thumb'ı güncelle
+  useEffect(() => {
+    if (trackWidth.current > 0) {
+      const progress = (value - minimumValue) / (maximumValue - minimumValue);
+      position.value = withSpring(progress * trackWidth.current, { stiffness: 300, damping: 30 });
+    }
+  }, [value, minimumValue, maximumValue]);
 
   const thumbStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: position.value }],
@@ -74,6 +81,8 @@ export function Slider({
         style={styles.trackContainer}
         onLayout={(e) => {
           trackWidth.current = e.nativeEvent.layout.width;
+          // FIX #7: Her layout değişiminde thumb'ı doğru pozisyona taşı
+          const progress = (value - minimumValue) / (maximumValue - minimumValue);
           position.value = progress * e.nativeEvent.layout.width;
         }}
         {...panResponder.panHandlers}

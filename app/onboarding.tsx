@@ -100,8 +100,10 @@ export default function OnboardingScreen() {
   };
 
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
-    if (viewableItems[0]?.index !== null) {
-      setCurrentIndex(viewableItems[0].index);
+    // FIX #19: null kontrolü ile güvenli index ataması
+    const idx = viewableItems[0]?.index;
+    if (idx !== null && idx !== undefined) {
+      setCurrentIndex(idx);
     }
   }).current;
 

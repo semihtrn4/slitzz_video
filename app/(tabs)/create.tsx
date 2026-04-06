@@ -53,11 +53,15 @@ export default function CreateScreen() {
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
         const fileInfo = await FileSystem.getInfoAsync(asset.uri);
-        
+
+        // FIX #14: expo-image-picker duration milisaniye döndürür, saniyeye çevir
+        const durationMs = asset.duration ?? 0;
+        const durationSec = durationMs > 1000 ? durationMs / 1000 : durationMs;
+
         setSelectedVideo({
           uri: asset.uri,
           name: asset.fileName || 'video.mp4',
-          duration: asset.duration || 0,
+          duration: durationSec,
           size: fileInfo.exists ? fileInfo.size : 0,
         });
       }

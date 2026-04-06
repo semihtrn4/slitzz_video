@@ -7,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import React from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as MediaLibrary from 'expo-media-library';
+import { ToastContainer } from '@/src/components/ui/Toast';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 void SplashScreen.preventAutoHideAsync();
@@ -85,6 +86,7 @@ export default function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1 }}>
         <StatusBar style="light" />
         <RootLayoutNav />
+        <ToastContainer />
       </GestureHandlerRootView>
     </QueryClientProvider>
   );

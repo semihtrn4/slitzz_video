@@ -20,7 +20,7 @@ export function useVideoEditor(project: Project) {
   const { updateProject } = useProjectStore();
   const haptics = useHaptics();
   const toast = useToast();
-  
+
   const {
     silenceSegments,
     setSilenceSegments,
@@ -46,23 +46,23 @@ export function useVideoEditor(project: Project) {
     setProcessingProgress(0);
 
     try {
-      // Extract audio first
       setProcessingStep('extracting-audio');
       const audioPath = await ffmpegService.extractAudio(project.originalVideoPath);
-      
+
       setProcessingStep('detecting-silences');
       const segments = await ffmpegService.detectSilences(
         audioPath,
         silenceSettings.threshold,
         silenceSettings.minDuration
       );
-      
+
       setSilenceSegments(segments);
-      
+
       if (segments.length === 0) {
         toast.show('No silent segments were detected in this video.', 'info');
       } else {
         haptics.impact(ImpactFeedbackStyle.Medium);
+        toast.show(`${segments.length} silence(s) detected.`, 'success');
       }
     } catch (error) {
       console.error('Error detecting silences:', error);
@@ -71,7 +71,8 @@ export function useVideoEditor(project: Project) {
       setProcessing(false);
       setProcessingStep('idle');
     }
-  }, [project, silenceSettings, hasPremium, canRemoveSilence, router, setSilenceSegments, setProcessing, setProcessingProgress, setProcessingStep]);
+  // FIX #18: haptics ve toast dependency'lere eklendi
+  }, [project, silenceSettings, hasPremium, canRemoveSilence, router, setSilenceSegments, setProcessing, setProcessingProgress, setProcessingStep, haptics, toast]);
 
   const applySilenceRemoval = useCallback(async () => {
     const keepSegments = silenceService.computeKeepSegments(
@@ -103,7 +104,7 @@ export function useVideoEditor(project: Project) {
       setProcessing(false);
       setProcessingStep('idle');
     }
-  }, [project, silenceSegments, silenceSettings, setProcessing, setProcessingProgress, setProcessingStep, updateProject]);
+  }, [project, silenceSegments, silenceSettings, setProcessing, setProcessingProgress, setProcessingStep, updateProject, toast]);
 
   const transcribe = useCallback(async (language: LanguageCode) => {
     setProcessing(true);
@@ -111,7 +112,6 @@ export function useVideoEditor(project: Project) {
     setProcessingProgress(0);
 
     try {
-      // Check and download model if needed
       const hasModel = await transcriptionService.isModelDownloaded();
       if (!hasModel) {
         await transcriptionService.downloadModel((progress) => {
@@ -119,14 +119,12 @@ export function useVideoEditor(project: Project) {
         });
       }
 
-      // Extract audio (using WAV for Whisper)
       setProcessingStep('extracting-audio');
       const audioPath = await ffmpegService.extractAudio(
         project.processedVideoPath || project.originalVideoPath,
-        true // forWhisper
+        true
       );
 
-      // Transcribe
       setProcessingStep('transcribing');
       const segments = await transcriptionService.transcribe(
         audioPath,
@@ -145,38 +143,42 @@ export function useVideoEditor(project: Project) {
       setProcessing(false);
       setProcessingStep('idle');
     }
-  }, [project, setSubtitleSegments, setProcessing, setProcessingProgress, setProcessingStep]);
+  // FIX #18: toast dependency'e eklendi
+  }, [project, setSubtitleSegments, setProcessing, setProcessingProgress, setProcessingStep, toast]);
 
-  const exportVideo = useCallback(async (config: ExportConfig) => {
+  const exportVideo = useCallback(async (inputConfig: ExportConfig) => {
     haptics.notification(NotificationFeedbackType.Success);
     setProcessing(true);
     setProcessingStep('encoding');
     setProcessingProgress(0);
+
+    // Relative path'li background music FFmpeg'i crash yapar, temizle
+    let config: ExportConfig = (inputConfig.musicPath && !inputConfig.musicPath.startsWith('/'))
+      ? { ...inputConfig, musicPath: undefined, musicVolume: undefined }
+      : { ...inputConfig };
 
     try {
       if (config.includeSubtitles) {
         const { subtitleSegments, subtitleStyle } = useEditorStore.getState();
         if (subtitleSegments.length > 0) {
           setProcessingStep('generating-subtitles');
-          
+
           let adjustedSegments = subtitleSegments;
-          // [Note] TranscriptionService already splits segments into 1-2 words since the last update.
 
           if (config.trimStart && config.trimStart > 0) {
             adjustedSegments = adjustedSegments
-              .filter(seg => seg.end > config.trimStart!)
-              .map(seg => ({
+              .filter((seg) => seg.end > config.trimStart!)
+              .map((seg) => ({
                 ...seg,
                 start: Math.max(0, seg.start - config.trimStart!),
                 end: seg.end - config.trimStart!,
               }));
           }
 
-          // Generate professional ASS subtitles instead of SRT
           config.srtPath = await transcriptionService.generateASS(
-            adjustedSegments, 
+            adjustedSegments,
             subtitleStyle,
-            { width: 1080, height: 1920 } // Base resolution for style scaling
+            { width: 1080, height: 1920 }
           );
           config.subtitleStyle = subtitleStyle;
         }
@@ -187,22 +189,28 @@ export function useVideoEditor(project: Project) {
         setProcessingStep(step as any);
       });
 
+      // FIX #6: outputPath null kontrolü — null ise hata fırlat
+      if (!outputPath) {
+        throw new Error('Export returned empty path');
+      }
+
       updateProject(project.id, {
         processedVideoPath: outputPath,
         status: 'exported',
       });
 
-      // --- Save to Gallery (Camera Roll) ---
-      setProcessingStep('saving' as any);
+      // FIX #4: 'saving' geçersiz ProcessingStep, 'exporting' kullan
+      setProcessingStep('exporting');
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status === 'granted') {
         await MediaLibrary.saveToLibraryAsync(outputPath);
         console.log('[MediaLibrary] Saved to gallery successfully');
       } else {
         console.warn('[MediaLibrary] Permission denied, skipping gallery save');
+        toast.show('Gallery permission denied. Video saved to app only.', 'warning');
       }
 
-      setProcessingStep('complete' as any);
+      setProcessingStep('complete');
       haptics.notification(NotificationFeedbackType.Success);
       return outputPath;
     } catch (error: any) {
@@ -210,13 +218,14 @@ export function useVideoEditor(project: Project) {
       if (error?.message === 'FREE_PLAN_DURATION_EXCEEDED') {
         router.push('/paywall');
       } else {
-        toast.show('Failed to export video', 'error');
+        toast.show(`Export failed: ${error?.message || 'Unknown error'}`, 'error');
       }
       return null;
     } finally {
       setProcessing(false);
     }
-  }, [project, hasPremium, router, setProcessing, setProcessingProgress, setProcessingStep, updateProject]);
+  // FIX #18: haptics ve toast dependency'lere eklendi
+  }, [project, hasPremium, router, setProcessing, setProcessingProgress, setProcessingStep, updateProject, haptics, toast]);
 
   const seekToTime = useCallback((time: number) => {
     useEditorStore.getState().setPlaybackPosition(time);

@@ -91,7 +91,17 @@ export const useProjectStore = create<ProjectState>()(
       storage: {
         getItem: async (name) => {
           const value = await AsyncStorage.getItem(name);
-          return value ? JSON.parse(value) : null;
+          if (!value) return null;
+          const parsed = JSON.parse(value);
+          // FIX #15: Date string'lerini gerçek Date nesnelerine çevir
+          if (parsed?.state?.projects) {
+            parsed.state.projects = parsed.state.projects.map((p: any) => ({
+              ...p,
+              createdAt: new Date(p.createdAt),
+              updatedAt: new Date(p.updatedAt),
+            }));
+          }
+          return parsed;
         },
         setItem: async (name, value) => {
           await AsyncStorage.setItem(name, JSON.stringify(value));

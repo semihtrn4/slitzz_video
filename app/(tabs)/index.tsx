@@ -17,7 +17,6 @@ import {
   Zap,
 } from 'lucide-react-native';
 import { format } from 'date-fns';
-import LottieView from 'lottie-react-native';
 
 import { Colors } from '@/src/constants/colors';
 import { useProjectStore } from '@/src/stores/projectStore';
@@ -32,7 +31,6 @@ export default function HomeScreen() {
   const { isPremium, canCreateProject } = useSubscriptionStore();
   
   const [_selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [lottieError, setLottieError] = useState(false);
 
   const handleCreateProject = () => {
     if (!canCreateProject(projects.length)) {
@@ -145,13 +143,8 @@ export default function HomeScreen() {
         {lottieError ? (
           <Zap size={48} color={primary} />
         ) : (
-          <LottieView
-            source={{ uri: 'https://assets5.lottiefiles.com/packages/lf20_fcfjwiyb.json' }}
-            autoPlay
-            loop
-            style={styles.lottieAnimation}
-            onAnimationFailure={() => setLottieError(true)}
-          />
+          // FIX #20: Dış URL yerine local fallback — network yoksa icon göster
+          <Zap size={48} color={primary} />
         )}
       </View>
       <Text style={styles.emptyTitle}>No Projects Yet</Text>

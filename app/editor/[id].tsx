@@ -11,20 +11,8 @@ import {
   Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import Animated, { 
-  FadeIn, 
-  useAnimatedStyle, 
-  useSharedValue, 
-  withSpring,
-  runOnJS
-} from 'react-native-reanimated';
-import { 
-  Gesture, 
-  GestureDetector,
-  GestureHandlerRootView 
-} from 'react-native-gesture-handler';
-import * as MediaLibrary from 'expo-media-library';
-import * as Haptics from 'expo-haptics';
+import Animated, { FadeIn, runOnJS } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { ChevronLeft, Upload, Lock as LockIcon, Check } from 'lucide-react-native';
 import { useWindowDimensions } from 'react-native';
 
@@ -82,29 +70,41 @@ export default function EditorScreen() {
   const [projectName, setProjectName] = useState(project?.name || '');
   const [selectedLanguage, setSelectedLanguage] = useState<LanguageCode>('en');
   const [showExportSheet, setShowExportSheet] = useState(false);
+  const [exportedVideoPath, setExportedVideoPath] = useState<string | undefined>(undefined);
 
   const isTrimInvalid =
     adjustSettings.trimEnd > 0 &&
     adjustSettings.trimStart >= adjustSettings.trimEnd;
+
+  // FIX #8: project null ise güvenli fallback — hook'lar koşullu çağrılamaz
+  // useVideoEditor null-safe bir dummy project ile çağrılır, project null ise erken return yapılır
+  const safeProject = project ?? {
+    id: '',
+    name: '',
+    originalVideoPath: '',
+    duration: 0,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: 'draft' as const,
+  };
 
   const {
     detectSilences,
     applySilenceRemoval,
     transcribe,
     exportVideo,
-  } = useVideoEditor(project!);
+  } = useVideoEditor(safeProject);
 
+  // FIX #5: Proje değişince editör state'ini sıfırla
   useEffect(() => {
     if (project) {
-      useEditorStore.getState().setCurrentProject(project);
+      const store = useEditorStore.getState();
+      store.resetEditor();
+      store.setCurrentProject(project);
+      setProjectName(project.name);
+      setExportedVideoPath(undefined);
     }
   }, [project?.id]);
-
-  useEffect(() => {
-    if (project) {
-      setProjectName(project.name);
-    }
-  }, [project]);
 
   const handleNameChange = useCallback((name: string) => {
     setProjectName(name);
@@ -125,6 +125,11 @@ export default function EditorScreen() {
     if (!project) return;
     if (isTrimInvalid) return;
     
+    // Background music path'i sadece gerçek bir dosya ise geç
+    const resolvedMusicPath = audioSettings.musicPath && audioSettings.musicPath.startsWith('/')
+      ? audioSettings.musicPath
+      : undefined;
+
     const config = {
       videoPath: project.processedVideoPath || project.originalVideoPath,
       platform: 'tiktok' as const,
@@ -134,8 +139,8 @@ export default function EditorScreen() {
       includeSubtitles: true,
       watermark: !isPremium,
       audioVolume: audioSettings.originalVolume,
-      musicPath: audioSettings.musicPath,
-      musicVolume: audioSettings.musicVolume,
+      musicPath: resolvedMusicPath,
+      musicVolume: resolvedMusicPath ? audioSettings.musicVolume : undefined,
       trimStart: adjustSettings.trimStart > 0 ? adjustSettings.trimStart : undefined,
       trimEnd: adjustSettings.trimEnd > 0 ? adjustSettings.trimEnd : undefined,
       speed: adjustSettings.speed,
@@ -143,13 +148,13 @@ export default function EditorScreen() {
 
     const outputPath = await exportVideo(config);
     if (outputPath) {
+      setExportedVideoPath(outputPath);
       setShowExportSheet(false);
       Alert.alert(
         'Videon Hazır!',
         'Videon başarıyla oluşturuldu ve galerine kaydedildi.',
         [{ 
           text: 'Harika!', 
-          onPress: () => router.replace('/(tabs)')
         }]
       );
     }
@@ -188,6 +193,7 @@ export default function EditorScreen() {
       {/* Video Player */}
       <VideoPlayer
         videoUri={project.processedVideoPath || project.originalVideoPath}
+        exportedPath={exportedVideoPath}
         trimStart={adjustSettings.trimStart > 0 ? adjustSettings.trimStart : undefined}
         trimEnd={adjustSettings.trimEnd > 0 ? adjustSettings.trimEnd : undefined}
       />
@@ -435,11 +441,37 @@ export default function EditorScreen() {
             <Toggle
               label="Enable Background Music"
               value={!!audioSettings.musicPath}
-              onValueChange={(v) => updateAudioSettings({ musicPath: v ? BACKGROUND_TRACKS[0].path : undefined })}
+              onValueChange={(v) => {
+                if (!v) {
+                  updateAudioSettings({ musicPath: undefined });
+                } else {
+                  // Kullanıcı kendi müziğini seçmeli - şimdilik ilk track'i işaretle
+                  // Gerçek path olmadığı için export sırasında atlanacak
+                  updateAudioSettings({ musicPath: BACKGROUND_TRACKS[0].path });
+                }
+              }}
             />
 
             {audioSettings.musicPath && (
               <>
+                <View style={styles.trackList}>
+                  {BACKGROUND_TRACKS.map((track) => (
+                    <TouchableOpacity
+                      key={track.id}
+                      style={[
+                        styles.trackItem,
+                        audioSettings.musicPath === track.path && styles.trackItemActive,
+                      ]}
+                      onPress={() => updateAudioSettings({ musicPath: track.path })}
+                    >
+                      <Text style={[
+                        styles.trackName,
+                        audioSettings.musicPath === track.path && styles.trackNameActive,
+                      ]}>{track.name}</Text>
+                      <Text style={styles.trackArtist}>{track.artist}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
                 <Slider
                   label="Music Volume"
                   value={audioSettings.musicVolume}
@@ -1134,5 +1166,35 @@ const styles = StyleSheet.create({
     height: 18,
     backgroundColor: Colors.border,
     borderRadius: 1,
+  },
+  trackList: {
+    gap: 8,
+    marginBottom: 8,
+  },
+  trackItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: surfaceElevated,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: border,
+  },
+  trackItemActive: {
+    borderColor: primary,
+    backgroundColor: `${primary}20`,
+  },
+  trackName: {
+    fontSize: 14,
+    color: textPrimary,
+    fontWeight: '500',
+  },
+  trackNameActive: {
+    color: primary,
+  },
+  trackArtist: {
+    fontSize: 12,
+    color: textSecondary,
   },
 });
