@@ -11,15 +11,22 @@ import {
   Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import Animated, { FadeIn } from 'react-native-reanimated';
-import {
-  ChevronLeft,
-  Upload,
-  Lock,
-  Check,
-} from 'lucide-react-native';
+import Animated, { 
+  FadeIn, 
+  useAnimatedStyle, 
+  useSharedValue, 
+  withSpring,
+  runOnJS
+} from 'react-native-reanimated';
+import { 
+  Gesture, 
+  GestureDetector,
+  GestureHandlerRootView 
+} from 'react-native-gesture-handler';
 import * as MediaLibrary from 'expo-media-library';
 import * as Haptics from 'expo-haptics';
+import { ChevronLeft, Upload, Lock as LockIcon, Check } from 'lucide-react-native';
+import { useWindowDimensions } from 'react-native';
 
 import { Colors } from '@/src/constants/colors';
 import { SUBTITLE_PRESETS, LANGUAGES, SPEED_OPTIONS, ASPECT_RATIOS, BACKGROUND_TRACKS } from '@/src/constants/subtitleStyles';
@@ -41,6 +48,8 @@ const { background, surface, surfaceElevated, primary, textPrimary, textSecondar
 
 export default function EditorScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { width: windowWidth } = useWindowDimensions();
+  const SLIDER_WIDTH = windowWidth - 64; // Horizontal padding
   const router = useRouter();
   const { getProjectById, updateProject } = useProjectStore();
   const project = getProjectById(id);
@@ -140,7 +149,7 @@ export default function EditorScreen() {
         'Videon başarıyla oluşturuldu ve galerine kaydedildi.',
         [{ 
           text: 'Harika!', 
-          onPress: () => router.replace('/(tabs)') // Navigate back to home
+          onPress: () => router.replace('/(tabs)')
         }]
       );
     }
@@ -330,7 +339,7 @@ export default function EditorScreen() {
                 >
                   <Text style={styles.presetName}>{key.charAt(0).toUpperCase() + key.slice(1)}</Text>
                   {!canUseSubtitleStyle(key) && (
-                    <Lock size={14} color={textSecondary} style={styles.lockIcon} />
+                    <LockIcon size={14} color={textSecondary} style={styles.lockIcon} />
                   )}
                 </TouchableOpacity>
               ))}
@@ -505,7 +514,44 @@ export default function EditorScreen() {
 
             <View style={styles.divider} />
 
-            <Text style={styles.sectionTitle}>Trim</Text>
+            <Text style={styles.sectionTitle}>Görsel Kırpma (Trim)</Text>
+            
+            {/* Visual Trim Slider */}
+            <View style={styles.trimSliderContainer}>
+              <View style={[styles.trimSliderBackground, { width: SLIDER_WIDTH }]} />
+              
+              {/* Range Indicator */}
+              <View 
+                style={[
+                  styles.trimRangeIndicator, 
+                  { 
+                    left: (adjustSettings.trimStart / project.duration) * SLIDER_WIDTH,
+                    width: ((adjustSettings.trimEnd || project.duration) - adjustSettings.trimStart) / project.duration * SLIDER_WIDTH 
+                  }
+                ]} 
+              />
+
+              {/* Start Handle */}
+              <GestureDetector gesture={Gesture.Pan().onUpdate((e) => {
+                const newTime = Math.max(0, Math.min((adjustSettings.trimEnd || project.duration) - 0.5, (e.x / SLIDER_WIDTH) * project.duration));
+                runOnJS(updateAdjustSettings)({ trimStart: newTime });
+              })}>
+                <View style={[styles.trimHandle, { left: (adjustSettings.trimStart / project.duration) * SLIDER_WIDTH - 10 }]}>
+                  <View style={styles.trimHandleBar} />
+                </View>
+              </GestureDetector>
+
+              {/* End Handle */}
+              <GestureDetector gesture={Gesture.Pan().onUpdate((e) => {
+                const newTime = Math.max(adjustSettings.trimStart + 0.5, Math.min(project.duration, (e.x / SLIDER_WIDTH) * project.duration));
+                runOnJS(updateAdjustSettings)({ trimEnd: newTime });
+              })}>
+                <View style={[styles.trimHandle, { left: ((adjustSettings.trimEnd || project.duration) / project.duration) * SLIDER_WIDTH - 10 }]}>
+                  <View style={styles.trimHandleBar} />
+                </View>
+              </GestureDetector>
+            </View>
+
             <View style={styles.trimRow}>
               <View style={styles.trimField}>
                 <Text style={styles.trimLabel}>Başlangıç</Text>
@@ -525,7 +571,7 @@ export default function EditorScreen() {
                 <Text style={styles.trimLabel}>Bitiş</Text>
                 <TextInput
                   style={styles.trimInput}
-                  value={formatTimeMsMs(adjustSettings.trimEnd)}
+                  value={formatTimeMsMs(adjustSettings.trimEnd || project.duration)}
                   onChangeText={(text) => {
                     const secs = parseTimeMsMs(text);
                     if (secs !== null) updateAdjustSettings({ trimEnd: secs });
@@ -543,7 +589,6 @@ export default function EditorScreen() {
         )}
       </ScrollView>
 
-      {/* Timeline */}
       <Timeline duration={project.duration} />
 
       {/* Export Sheet */}
@@ -577,7 +622,7 @@ export default function EditorScreen() {
                 >
                   <Text style={styles.qualityLabel}>{res.label}</Text>
                   {res.premium && !isPremium && (
-                    <Lock size={16} color={textSecondary} />
+                    <LockIcon size={16} color={textSecondary} />
                   )}
                 </TouchableOpacity>
               ))}
@@ -1045,5 +1090,49 @@ const styles = StyleSheet.create({
   },
   positionLabelActive: {
     color: primary,
+  },
+  colorLabelActive: {
+    color: primary,
+  },
+  trimSliderContainer: {
+    height: 50,
+    marginTop: 16,
+    marginBottom: 24,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  trimSliderBackground: {
+    height: 6,
+    backgroundColor: border,
+    borderRadius: 3,
+  },
+  trimRangeIndicator: {
+    position: 'absolute',
+    height: 6,
+    backgroundColor: primary,
+    borderRadius: 3,
+    top: 22,
+  },
+  trimHandle: {
+    position: 'absolute',
+    width: 24,
+    height: 38,
+    backgroundColor: 'white',
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    top: 6,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+    zIndex: 100,
+  },
+  trimHandleBar: {
+    width: 2,
+    height: 18,
+    backgroundColor: Colors.border,
+    borderRadius: 1,
   },
 });

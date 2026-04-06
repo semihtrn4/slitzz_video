@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as MediaLibrary from 'expo-media-library';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 void SplashScreen.preventAutoHideAsync();
@@ -23,8 +24,14 @@ function RootLayoutNav() {
       try {
         const completed = await AsyncStorage.getItem('onboarding_completed');
         setHasCompletedOnboarding(completed === 'true');
+        
+        // One-time permission request at startup
+        const { status } = await MediaLibrary.getPermissionsAsync();
+        if (status !== 'granted') {
+          await MediaLibrary.requestPermissionsAsync();
+        }
       } catch (error) {
-        console.error('Error checking onboarding:', error);
+        console.error('Error during startup initialization:', error);
       } finally {
         setIsReady(true);
         void SplashScreen.hideAsync();

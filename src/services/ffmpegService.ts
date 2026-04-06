@@ -151,17 +151,16 @@ export class FFmpegService {
     let filterComplex = '';
     let videoStream = '[0:v]';
     let audioStream = '[0:a]';
-    
     // --- Audio Initial Preparation ---
-    // Check if original video has audio to prevent FFmpeg crashes during Trim/Speed/Mix
     const hasAudio = await this.checkHasAudio(config.videoPath);
     console.log(`[FFmpeg] Video has audio: ${hasAudio}`);
 
     if (!hasAudio) {
-      // Create a silent source matching video if no audio exists
-      // Using anullsrc as input is complex, so we'll use a filter
-      filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[silent_init]; `;
-      audioStream = '[silent_init]';
+      filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[a0]; `;
+      audioStream = '[a0]';
+    } else {
+      filterComplex += `[0:a]anull[a0]; `;
+      audioStream = '[a0]';
     }
     
     // 1. Scale & Aspect Ratio & Resolution
@@ -181,29 +180,26 @@ export class FFmpegService {
     const width = is4K ? baseWidth * 2 : baseWidth;
     const height = is4K ? baseHeight * 2 : baseHeight;
 
-    filterComplex += `${videoStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[scaled]; `;
-    videoStream = '[scaled]';
+    filterComplex += `${videoStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v1]; `;
+    videoStream = '[v1]';
 
-    // 2. Trim (Video & Audio)
     if (config.trimStart !== undefined || config.trimEnd !== undefined) {
       const start = config.trimStart || 0;
-      const end = config.trimEnd || 999999; // effectively no end if not specified
-      filterComplex += `${videoStream}trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS[trimmedv]; `;
-      videoStream = '[trimmedv]';
-      filterComplex += `${audioStream}atrim=start=${start.toFixed(3)}:end=${end.toFixed(3)},asetpts=PTS-STARTPTS[trimmeda]; `;
-      audioStream = '[trimmeda]';
+      const end = config.trimEnd || 999999;
+      filterComplex += `${videoStream}trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS[v2]; `;
+      videoStream = '[v2]';
+      filterComplex += `${audioStream}atrim=start=${start.toFixed(3)}:end=${end.toFixed(3)},asetpts=PTS-STARTPTS[a1]; `;
+      audioStream = '[a1]';
     }
 
     // 3. Adjustments (Brightness/Contrast) - if needed
     // filterComplex += `${videoStream}eq=brightness=0:contrast=1[adjusted]; `;
     // videoStream = '[adjusted]';
 
-    // 3. Speed (Video & Audio)
     if (config.speed && config.speed !== 1) {
-      filterComplex += `${videoStream}setpts=${(1/config.speed).toFixed(4)}*PTS[speedv]; `;
-      videoStream = '[speedv]';
+      filterComplex += `${videoStream}setpts=${(1/config.speed).toFixed(4)}*PTS[v3]; `;
+      videoStream = '[v3]';
       
-      // atempo has a limit of 0.5 - 2.0. Need to chain if outside this range.
       let s = config.speed;
       let atempoFilter = '';
       while (s > 2.0) {
@@ -216,36 +212,31 @@ export class FFmpegService {
       }
       atempoFilter += `atempo=${s.toFixed(3)}`;
       
-      filterComplex += `${audioStream}${atempoFilter}[speeda]; `;
-      audioStream = '[speeda]';
+      filterComplex += `${audioStream}${atempoFilter}[a2]; `;
+      audioStream = '[a2]';
     }
 
-    // 4. Subtitles (if SRT/ASS exists)
     if (config.srtPath && config.includeSubtitles) {
       const srtPathEscaped = config.srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      // ffmpeg subtitles filter uses 'subtitles' for both .srt and .ass
-      filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[subbed]; `;
-      videoStream = '[subbed]';
+      filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[v4]; `;
+      videoStream = '[v4]';
     }
     
-    // 5. Watermark (if free plan)
     if (!isPremium && config.watermark) {
-      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[watermarked]; `;
-      videoStream = '[watermarked]';
+      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[v5]; `;
+      videoStream = '[v5]';
     }
 
-    // --- Audio Mixing & Final Volume ---
-    // At this point, audioStream has already been processed by Trim/Speed filters if they were active
     const finalVol = (config.audioVolume / 100).toFixed(2);
-    filterComplex += `${audioStream}volume=${finalVol}[vol_orig]; `;
+    filterComplex += `${audioStream}volume=${finalVol}[v_orig]; `;
     
     if (config.musicPath && config.musicVolume !== undefined) {
       const mVol = (config.musicVolume / 100).toFixed(2);
-      // Mix background music (Input index 1)
-      filterComplex += `[1:a]volume=${mVol}[vol_music]; `;
-      filterComplex += `[vol_orig][vol_music]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
+      filterComplex += `[1:a]volume=${mVol}[v_music]; `;
+      // Use normalize=0 to prevent amix from automatically balancing volumes
+      filterComplex += `[v_orig][v_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`;
     } else {
-      filterComplex += `[vol_orig]anull[outa]`;
+      filterComplex += `[v_orig]anull[outa]`;
     }
 
     // --- FFmpeg Command with Arguments (Safer than string) ---
