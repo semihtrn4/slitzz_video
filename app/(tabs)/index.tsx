@@ -22,8 +22,6 @@ import { Colors } from '@/src/constants/colors';
 import { useProjectStore } from '@/src/stores/projectStore';
 import { useSubscriptionStore } from '@/src/stores/subscriptionStore';
 import type { Project } from '@/src/types';
-import * as MediaLibrary from 'expo-media-library';
-import { useEffect } from 'react';
 
 const { background, surface, surfaceElevated, primary, textPrimary, textSecondary, border, success } = Colors;
 
@@ -33,17 +31,6 @@ export default function HomeScreen() {
   const { isPremium, canCreateProject } = useSubscriptionStore();
   
   const [_selectedProject, setSelectedProject] = useState<Project | null>(null);
-
-  useEffect(() => {
-    // Güvenli noktada Media Library izinlerini kontrol et
-    const checkPermissions = async () => {
-      const { status, canAskAgain } = await MediaLibrary.getPermissionsAsync();
-      if (status !== 'granted' && canAskAgain) {
-        await MediaLibrary.requestPermissionsAsync();
-      }
-    };
-    void checkPermissions();
-  }, []);
 
   const handleCreateProject = () => {
     if (!canCreateProject(projects.length)) {

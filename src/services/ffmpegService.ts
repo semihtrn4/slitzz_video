@@ -1,7 +1,6 @@
 import { FFmpegKit, ReturnCode, FFmpegKitConfig } from 'ffmpeg-kit-react-native';
-import * as FileSystem from 'expo-file-system/legacy';
-const documentDirectory = (FileSystem as any).documentDirectory;
-const cacheDirectory = (FileSystem as any).cacheDirectory;
+import * as FileSystem from 'expo-file-system';
+const { documentDirectory, cacheDirectory } = FileSystem;
 import { silenceService } from './silenceService';
 import type { SilenceSegment, TimeSegment, ExportConfig } from '../types';
 

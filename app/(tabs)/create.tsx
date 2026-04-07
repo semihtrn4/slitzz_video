@@ -10,9 +10,8 @@ import {
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-const documentDirectory = (FileSystem as any).documentDirectory;
-const cacheDirectory = (FileSystem as any).cacheDirectory;
+import * as FileSystem from 'expo-file-system';
+const { documentDirectory, cacheDirectory } = FileSystem;
 import { getPath } from '@/src/utils/pathUtils';
 import {
   Image as ImageIcon,

@@ -1,6 +1,5 @@
-import * as FileSystem from 'expo-file-system/legacy';
-const documentDirectory = (FileSystem as any).documentDirectory;
-const cacheDirectory = (FileSystem as any).cacheDirectory;
+import * as FileSystem from 'expo-file-system';
+const { documentDirectory, cacheDirectory } = FileSystem;
 import type { SubtitleSegment } from '../types';
 
 const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
@@ -141,7 +140,7 @@ export class TranscriptionService {
 
   // Generate SRT file from segments (Requirements: 6.4, 6.5)
   async generateSRT(segments: SubtitleSegment[]): Promise<string> {
-    const tempDir = (FileSystem as any).cacheDirectory + 'temp/';
+    const tempDir = (cacheDirectory || '') + 'temp/';
     const tempDirInfo = await FileSystem.getInfoAsync(tempDir);
     if (!tempDirInfo.exists) {
       await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true });
