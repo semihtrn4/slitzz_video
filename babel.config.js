@@ -5,11 +5,9 @@ module.exports = function (api) {
       [
         'babel-preset-expo',
         {
-          // expo 54: import.meta transform (expo-router 6 için gerekli)
           unstable_transformImportMeta: true,
         },
       ],
     ],
-    plugins: ['react-native-reanimated/plugin'],
   };
 };
