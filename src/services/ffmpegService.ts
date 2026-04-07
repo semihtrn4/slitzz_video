@@ -1,5 +1,6 @@
 import { FFmpegKit, ReturnCode, FFmpegKitConfig } from 'ffmpeg-kit-react-native';
 import * as FileSystem from 'expo-file-system';
+import { Directory } from 'expo-file-system';
 const { documentDirectory, cacheDirectory } = FileSystem;
 import { silenceService } from './silenceService';
 import type { SilenceSegment, TimeSegment, ExportConfig } from '../types';
@@ -154,9 +155,9 @@ export class FFmpegService {
   ): Promise<string> {
     await this.ensureLogCallback();
     const exportsDir = `${documentDirectory || ''}exports/`;
-    const dirInfo = await FileSystem.getInfoAsync(exportsDir);
-    if (!dirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(exportsDir, { intermediates: true });
+    const dir = new Directory(exportsDir);
+    if (!dir.exists) {
+      dir.create();
     }
 
     const outputPath = `${exportsDir}BlitzCut_${Date.now()}.mp4`;

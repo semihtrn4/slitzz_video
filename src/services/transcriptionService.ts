@@ -1,7 +1,9 @@
 import * as FileSystem from 'expo-file-system';
+import { File, Directory } from 'expo-file-system';
 const { documentDirectory, cacheDirectory } = FileSystem;
 import type { SubtitleSegment } from '../types';
 
+// Use direct download URL with redirect following
 const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
 const MODEL_DIR = (documentDirectory || '') + 'models/';
 const MODEL_PATH = MODEL_DIR + 'ggml-base.bin';
@@ -18,20 +20,24 @@ export class TranscriptionService {
   }
 
   async isModelDownloaded(): Promise<boolean> {
-    const info = await FileSystem.getInfoAsync(MODEL_PATH);
-    return info.exists;
+    try {
+      const f = new File(MODEL_PATH);
+      return f.exists;
+    } catch {
+      return false;
+    }
   }
 
   async downloadModel(onProgress?: (progress: number) => void): Promise<string> {
-    const dirInfo = await FileSystem.getInfoAsync(MODEL_DIR);
-    if (!dirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(MODEL_DIR, { intermediates: true });
+    const dir = new Directory(MODEL_DIR);
+    if (!dir.exists) {
+      dir.create();
     }
     console.log('[Whisper] Downloading model...');
     const downloadResumable = FileSystem.createDownloadResumable(
       MODEL_URL,
       MODEL_PATH,
-      {},
+      { headers: { 'User-Agent': 'Mozilla/5.0' } },
       (downloadProgress) => {
         const { totalBytesWritten, totalBytesExpectedToWrite } = downloadProgress;
         if (totalBytesExpectedToWrite > 0) {
@@ -43,9 +49,9 @@ export class TranscriptionService {
     if (!result || !result.uri) {
       throw new Error('[Whisper] Download failed: no result returned');
     }
-    const info = await FileSystem.getInfoAsync(MODEL_PATH);
-    if (!info.exists || info.size < 1000000) { // Tiny model en az 30MB civarı, 1MB altı mutlaka hatalıdır
-      await FileSystem.deleteAsync(MODEL_PATH, { idempotent: true });
+    const f = new File(MODEL_PATH);
+    if (!f.exists || (f.size ?? 0) < 1000000) {
+      try { f.delete(); } catch { /* ignore */ }
       throw new Error('[Whisper] Download verification failed: file is corrupt or too small');
     }
     this.modelPath = MODEL_PATH;
@@ -141,9 +147,9 @@ export class TranscriptionService {
   // Generate SRT file from segments (Requirements: 6.4, 6.5)
   async generateSRT(segments: SubtitleSegment[]): Promise<string> {
     const tempDir = (cacheDirectory || '') + 'temp/';
-    const tempDirInfo = await FileSystem.getInfoAsync(tempDir);
-    if (!tempDirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true });
+    const dir = new Directory(tempDir);
+    if (!dir.exists) {
+      dir.create();
     }
     const srtPath = tempDir + `subtitles_${Date.now()}.srt`;
     const srtContent = buildSRTContent(segments);

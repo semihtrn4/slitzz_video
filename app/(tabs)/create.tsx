@@ -11,6 +11,7 @@ import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import { File, Directory, Paths } from 'expo-file-system';
 const { documentDirectory, cacheDirectory } = FileSystem;
 import { getPath } from '@/src/utils/pathUtils';
 import {
@@ -51,9 +52,16 @@ export default function CreateScreen() {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        const fileInfo = await FileSystem.getInfoAsync(asset.uri);
+        // Use new File API — getInfoAsync is deprecated in expo-file-system 19.x
+        let fileSize = 0;
+        try {
+          const f = new File(asset.uri);
+          fileSize = f.size ?? 0;
+        } catch {
+          fileSize = 0;
+        }
 
-        // FIX #14: expo-image-picker duration milisaniye döndürür, saniyeye çevir
+        // expo-image-picker duration is in milliseconds, convert to seconds
         const durationMs = asset.duration ?? 0;
         const durationSec = durationMs > 1000 ? durationMs / 1000 : durationMs;
 
@@ -61,7 +69,7 @@ export default function CreateScreen() {
           uri: asset.uri,
           name: asset.fileName || 'video.mp4',
           duration: durationSec,
-          size: fileInfo.exists ? fileInfo.size : 0,
+          size: fileSize,
         });
       }
     } catch (error: any) {
@@ -79,7 +87,13 @@ export default function CreateScreen() {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        const fileInfo = await FileSystem.getInfoAsync(asset.uri);
+        let fileSize = 0;
+        try {
+          const f = new File(asset.uri);
+          fileSize = f.size ?? 0;
+        } catch {
+          fileSize = 0;
+        }
         
         // Get video duration using FFmpeg
         const videoInfo = await ffmpegService.getVideoInfo(asset.uri);
@@ -88,7 +102,7 @@ export default function CreateScreen() {
           uri: asset.uri,
           name: asset.name,
           duration: videoInfo.duration,
-          size: fileInfo.exists ? fileInfo.size : 0,
+          size: fileSize,
         });
       }
     } catch (error: any) {
@@ -124,9 +138,9 @@ export default function CreateScreen() {
     try {
       // Copy video to app directory
       const projectsDir = getPath(documentDirectory, 'projects/');
-      const dirInfo = await FileSystem.getInfoAsync(projectsDir);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(projectsDir, { intermediates: true });
+      const dir = new Directory(projectsDir);
+      if (!dir.exists) {
+        dir.create();
       }
 
       const fileName = `project_${Date.now()}.mp4`;
