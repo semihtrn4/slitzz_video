@@ -1,16 +1,12 @@
 import * as FileSystem from 'expo-file-system';
-import { File, Directory } from 'expo-file-system';
-const { documentDirectory, cacheDirectory } = FileSystem;
+import { File, Directory, Paths } from 'expo-file-system';
 import type { SubtitleSegment } from '../types';
 
-// Use direct download URL with redirect following
-const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
-const MODEL_DIR = (documentDirectory || '') + 'models/';
-const MODEL_PATH = MODEL_DIR + 'ggml-base.bin';
+import { getPath, ensureAbsolute } from '../utils/pathUtils';
 
 export class TranscriptionService {
   private static instance: TranscriptionService;
-  private modelPath: string = MODEL_PATH;
+  private _modelPath: string | null = null;
 
   static getInstance(): TranscriptionService {
     if (!TranscriptionService.instance) {
@@ -19,9 +15,18 @@ export class TranscriptionService {
     return TranscriptionService.instance;
   }
 
+  private getModelDir(): string {
+    return getPath(Paths.document, 'models/');
+  }
+
+  private getModelPath(): string {
+    return getPath(this.getModelDir(), 'ggml-base.bin');
+  }
+
   async isModelDownloaded(): Promise<boolean> {
     try {
-      const f = new File(MODEL_PATH);
+      const path = this.getModelPath();
+      const f = new File(path);
       return f.exists;
     } catch {
       return false;
@@ -29,14 +34,18 @@ export class TranscriptionService {
   }
 
   async downloadModel(onProgress?: (progress: number) => void): Promise<string> {
-    const dir = new Directory(MODEL_DIR);
+    const modelDir = this.getModelDir();
+    const modelPath = this.getModelPath();
+    const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
+
+    const dir = new Directory(modelDir);
     if (!dir.exists) {
       dir.create();
     }
-    console.log('[Whisper] Downloading model...');
+    console.log('[Whisper] Downloading model to:', modelPath);
     const downloadResumable = FileSystem.createDownloadResumable(
       MODEL_URL,
-      MODEL_PATH,
+      modelPath,
       { headers: { 'User-Agent': 'Mozilla/5.0' } },
       (downloadProgress) => {
         const { totalBytesWritten, totalBytesExpectedToWrite } = downloadProgress;
@@ -49,14 +58,14 @@ export class TranscriptionService {
     if (!result || !result.uri) {
       throw new Error('[Whisper] Download failed: no result returned');
     }
-    const f = new File(MODEL_PATH);
+    const f = new File(modelPath);
     if (!f.exists || (f.size ?? 0) < 1000000) {
       try { f.delete(); } catch { /* ignore */ }
       throw new Error('[Whisper] Download verification failed: file is corrupt or too small');
     }
-    this.modelPath = MODEL_PATH;
-    console.log('[Whisper] Model downloaded and verified:', MODEL_PATH);
-    return MODEL_PATH;
+    this._modelPath = modelPath;
+    console.log('[Whisper] Model downloaded and verified:', modelPath);
+    return modelPath;
   }
 
   // Transcribe audio file using whisper.rn (Requirements: 6.1, 6.2, 6.3, 6.6)
@@ -85,7 +94,8 @@ export class TranscriptionService {
     onProgress?.('Initializing model...');
     let ctx: any;
     try {
-      ctx = await whisper.initWhisper({ filePath: this.modelPath });
+      const modelPath = this.getModelPath();
+      ctx = await whisper.initWhisper({ filePath: modelPath });
       console.log('[Whisper] Model initialized successfully');
     } catch (err) {
       console.error('[Whisper] Initialization error:', err);
@@ -94,8 +104,11 @@ export class TranscriptionService {
 
     onProgress?.('Transcribing audio...');
 
+    // Ensure audioPath is absolute
+    const absAudioPath = ensureAbsolute(audioPath);
+
     // ctx.transcribe returns { stop, promise }
-    const { promise } = ctx.transcribe(audioPath, {
+    const { promise } = ctx.transcribe(absAudioPath, {
       language,
       word_timestamps: true, // Ensure we get word-level precision
       onProgress: (p: number) => {
@@ -146,7 +159,7 @@ export class TranscriptionService {
 
   // Generate SRT file from segments (Requirements: 6.4, 6.5)
   async generateSRT(segments: SubtitleSegment[]): Promise<string> {
-    const tempDir = (cacheDirectory || '') + 'temp/';
+    const tempDir = getPath(Paths.cache, 'temp/');
     const dir = new Directory(tempDir);
     if (!dir.exists) {
       dir.create();
@@ -213,7 +226,7 @@ export class TranscriptionService {
     style: any,
     resolution: { width: number; height: number }
   ): Promise<string> {
-    const assPath = `${cacheDirectory || ''}subtitles_${Date.now()}.ass`;
+    const assPath = getPath(Paths.cache, `subtitles_${Date.now()}.ass`);
     
     // Convert hex colors to ASS format (&HBBGGRR&)
     const convertColor = (hex: string) => {

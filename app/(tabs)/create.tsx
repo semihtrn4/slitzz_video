@@ -12,8 +12,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { File, Directory, Paths } from 'expo-file-system';
-const { documentDirectory, cacheDirectory } = FileSystem;
-import { getPath } from '@/src/utils/pathUtils';
+import { getPath, ensureAbsolute } from '@/src/utils/pathUtils';
 import {
   Image as ImageIcon,
   FileUp,
@@ -55,7 +54,7 @@ export default function CreateScreen() {
         // Use new File API — getInfoAsync is deprecated in expo-file-system 19.x
         let fileSize = 0;
         try {
-          const f = new File(asset.uri);
+          const f = new File(ensureAbsolute(asset.uri));
           fileSize = f.size ?? 0;
         } catch {
           fileSize = 0;
@@ -89,7 +88,7 @@ export default function CreateScreen() {
         const asset = result.assets[0];
         let fileSize = 0;
         try {
-          const f = new File(asset.uri);
+          const f = new File(ensureAbsolute(asset.uri));
           fileSize = f.size ?? 0;
         } catch {
           fileSize = 0;
@@ -137,7 +136,7 @@ export default function CreateScreen() {
     setIsLoading(true);
     try {
       // Copy video to app directory
-      const projectsDir = getPath(documentDirectory, 'projects/');
+      const projectsDir = getPath(Paths.document, 'projects/');
       const dir = new Directory(projectsDir);
       if (!dir.exists) {
         dir.create();

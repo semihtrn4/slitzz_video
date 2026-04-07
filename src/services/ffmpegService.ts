@@ -1,8 +1,9 @@
-import { FFmpegKit, ReturnCode, FFmpegKitConfig } from 'ffmpeg-kit-react-native';
+// @ts-ignore - ffmpeg-kit-react-native is aliased to kroog-ffmpeg-kit-react-native and its d.ts is not structured as a module
+import { FFmpegKit, ReturnCode, FFmpegKitConfig, Log, Statistics } from 'ffmpeg-kit-react-native';
 import * as FileSystem from 'expo-file-system';
-import { Directory } from 'expo-file-system';
-const { documentDirectory, cacheDirectory } = FileSystem;
+import { Directory, Paths } from 'expo-file-system';
 import { silenceService } from './silenceService';
+import { getPath, ensureAbsolute } from '../utils/pathUtils';
 import type { SilenceSegment, TimeSegment, ExportConfig } from '../types';
 
 export class FFmpegService {
@@ -20,7 +21,7 @@ export class FFmpegService {
     if (!this.logEnabled) {
       this.logEnabled = true;
       try {
-        FFmpegKitConfig.enableLogCallback((log) => {
+        FFmpegKitConfig.enableLogCallback((log: Log) => {
           console.log(`[FFmpeg Log] ${log.getMessage()}`);
         });
       } catch (e) {
@@ -32,14 +33,16 @@ export class FFmpegService {
   async extractAudio(videoPath: string, forWhisper: boolean = false): Promise<string> {
     await this.ensureLogCallback();
     const ext = forWhisper ? 'wav' : 'm4a';
-    const audioPath = `${cacheDirectory || ''}extracted_audio_${Date.now()}.${ext}`;
+    const audioPath = getPath(Paths.cache, `extracted_audio_${Date.now()}.${ext}`);
     console.log('[FFmpeg] Extracting audio to:', audioPath);
+
+    const absVideoPath = ensureAbsolute(videoPath);
 
     let command = '';
     if (forWhisper) {
-      command = `-i "${videoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${audioPath}"`;
+      command = `-i "${absVideoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${audioPath}"`;
     } else {
-      command = `-i "${videoPath}" -vn -acodec copy -y "${audioPath}"`;
+      command = `-i "${absVideoPath}" -vn -acodec copy -y "${audioPath}"`;
     }
 
     const session = await FFmpegKit.execute(command);
@@ -55,11 +58,13 @@ export class FFmpegService {
 
   async generateThumbnail(videoPath: string, timeSeconds: number): Promise<string> {
     await this.ensureLogCallback();
-    const thumbnailPath = `${cacheDirectory || ''}thumb_${Date.now()}.jpg`;
+    const thumbnailPath = getPath(Paths.cache, `thumb_${Date.now()}.jpg`);
     console.log('[FFmpeg] Generating thumbnail at:', thumbnailPath);
 
+    const absVideoPath = ensureAbsolute(videoPath);
+
     const session = await FFmpegKit.execute(
-      `-ss ${timeSeconds} -i "${videoPath}" -vframes 1 -q:v 2 -y "${thumbnailPath}"`
+      `-ss ${timeSeconds} -i "${absVideoPath}" -vframes 1 -q:v 2 -y "${thumbnailPath}"`
     );
     const returnCode = await session.getReturnCode();
 
@@ -82,12 +87,11 @@ export class FFmpegService {
       `-i "${audioPath}" -af silencedetect=n=${threshold}dB:d=${minDuration} -f null -`
     );
 
-    // FIX #1 & #9: silencedetect çıktısı stderr'de gelir, getLogs() kullanılmalı
+    // FIX #1    // silencedetect -f null - komutu genellikle non-zero döner, output'a bakarak karar ver
     const logs = await session.getLogs();
-    const allOutput = logs.map((l) => l.getMessage()).join('\n');
+    const allOutput = logs.map((l: Log) => l.getMessage()).join('\n');
     const returnCode = await session.getReturnCode();
 
-    // silencedetect -f null - komutu genellikle non-zero döner, output'a bakarak karar ver
     if (ReturnCode.isSuccess(returnCode) || allOutput.includes('silencedetect')) {
       return silenceService.parseSilenceOutput(allOutput);
     } else {
@@ -103,11 +107,12 @@ export class FFmpegService {
     await this.ensureLogCallback();
     if (keepSegments.length === 0) return videoPath;
 
-    const outputPath = `${cacheDirectory || ''}cut_${Date.now()}.mp4`;
+    const outputPath = getPath(Paths.cache, `cut_${Date.now()}.mp4`);
     console.log('[FFmpeg] Removing silences, generating:', outputPath);
 
     // FIX #2: Ses akışı olup olmadığını kontrol et
-    const hasAudio = await this.checkHasAudio(videoPath);
+    const absVideoPath = ensureAbsolute(videoPath);
+    const hasAudio = await this.checkHasAudio(absVideoPath);
 
     let filter = '';
     let vStreams = '';
@@ -122,7 +127,7 @@ export class FFmpegService {
       filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${videoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${outputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${outputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) {
         return outputPath;
@@ -138,7 +143,7 @@ export class FFmpegService {
       filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=0[v]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${videoPath}" -filter_complex "${filter}" -map "[v]" -c:v libx264 -preset superfast -an -y "${outputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -c:v libx264 -preset superfast -an -y "${outputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) {
         return outputPath;
@@ -154,18 +159,24 @@ export class FFmpegService {
     onProgress?: (progress: number, step: string) => void
   ): Promise<string> {
     await this.ensureLogCallback();
-    const exportsDir = `${documentDirectory || ''}exports/`;
+    const exportsDir = getPath(Paths.document, 'exports/');
     const dir = new Directory(exportsDir);
     if (!dir.exists) {
       dir.create();
     }
 
-    const outputPath = `${exportsDir}BlitzCut_${Date.now()}.mp4`;
+    const outputPath = getPath(exportsDir, `BlitzCut_${Date.now()}.mp4`);
     onProgress?.(0.1, 'Preparing export...');
 
     let filterComplex = '';
     let videoStream = '[0:v]';
     let audioStream = '[0:a]';
+    
+    // Video süresini tahmin et (fade out ve progress için)
+    const rawDuration = config.trimEnd 
+      ? (config.trimEnd - (config.trimStart || 0)) 
+      : 999; // Fallback
+    const estimatedDuration = rawDuration / (config.speed || 1);
 
     // FIX #1: checkHasAudio artık getLogs() kullanıyor (aşağıda)
     const hasAudio = await this.checkHasAudio(config.videoPath);
@@ -223,7 +234,9 @@ export class FFmpegService {
     }
 
     if (config.srtPath && config.includeSubtitles) {
-      const srtPathEscaped = config.srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      // FFmpeg subtitles filtresi file:// protokolünü sevmez, ham yol bekler
+      const rawSrtPath = config.srtPath.replace('file://', '');
+      const srtPathEscaped = rawSrtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
       filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[v4]; `;
       videoStream = '[v4]';
     }
@@ -234,20 +247,43 @@ export class FFmpegService {
     }
 
     const finalVol = (config.audioVolume / 100).toFixed(2);
-    filterComplex += `${audioStream}volume=${finalVol}[v_orig]; `;
+    let audioFilter = `volume=${finalVol}`;
+
+    // Apply Fade In/Out
+    if (config.fadeIn) {
+      audioFilter += `,afade=t=in:st=0:d=1`;
+    }
+    if (config.fadeOut && estimatedDuration > 1) {
+      const fadeOutStart = Math.max(0, estimatedDuration - 1);
+      audioFilter += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=1`;
+    }
+
+    filterComplex += `${audioStream}${audioFilter}[v_orig]; `;
 
     if (config.musicPath && config.musicVolume !== undefined) {
       const mVol = (config.musicVolume / 100).toFixed(2);
-      filterComplex += `[1:a]volume=${mVol}[v_music]; `;
+      let musicFilter = `volume=${mVol}`;
+      
+      if (config.fadeIn) {
+        musicFilter += `,afade=t=in:st=0:d=1`;
+      }
+      if (config.fadeOut && estimatedDuration > 1) {
+        const fadeOutStart = Math.max(0, estimatedDuration - 1);
+        musicFilter += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=1`;
+      }
+
+      filterComplex += `[1:a]${musicFilter}[v_music]; `;
       filterComplex += `[v_orig][v_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`;
     } else {
       filterComplex += `[v_orig]anull[outa]`;
     }
 
-    const args = ['-i', config.videoPath];
+    const absVideoPath = ensureAbsolute(config.videoPath);
+    const args = ['-i', absVideoPath];
 
     if (config.musicPath) {
-      args.push('-stream_loop', '-1', '-i', config.musicPath);
+      const absMusicPath = ensureAbsolute(config.musicPath);
+      args.push('-stream_loop', '-1', '-i', absMusicPath);
     }
 
     args.push(
@@ -264,15 +300,8 @@ export class FFmpegService {
 
     console.log('[FFmpeg] Exporting with arguments:', JSON.stringify(args));
 
-    // FIX #7: Her export öncesi önceki callback'i temizle, gerçek progress hesapla
-    FFmpegKitConfig.enableStatisticsCallback(null as any);
-
-    // Video süresini tahmin et (trim varsa kısalt)
-    const estimatedDuration = config.trimEnd
-      ? (config.trimEnd - (config.trimStart || 0))
-      : 999;
-
-    FFmpegKitConfig.enableStatisticsCallback((stats) => {
+    // Progress takibi için statistics callback'i kullan
+    FFmpegKitConfig.enableStatisticsCallback((stats: Statistics) => {
       const timeMs = stats.getTime(); // işlenen süre ms
       if (timeMs > 0 && estimatedDuration > 0) {
         const progress = Math.min(0.9, (timeMs / 1000) / estimatedDuration);
@@ -304,10 +333,11 @@ export class FFmpegService {
     fps: number;
   }> {
     await this.ensureLogCallback();
-    const session = await FFmpegKit.execute(`-i "${videoPath}" -hide_banner`);
+    const absVideoPath = ensureAbsolute(videoPath);
+    const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
     // FIX #1: getVideoInfo de getLogs() kullanmalı
     const logs = await session.getLogs();
-    const output = logs.map((l) => l.getMessage()).join('\n');
+    const output = logs.map((l: Log) => l.getMessage()).join('\n');
 
     const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
     let duration = 0;
@@ -335,9 +365,10 @@ export class FFmpegService {
   async checkHasAudio(videoPath: string): Promise<boolean> {
     await this.ensureLogCallback();
     try {
-      const session = await FFmpegKit.execute(`-i "${videoPath}" -hide_banner`);
+      const absVideoPath = ensureAbsolute(videoPath);
+      const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
       const logs = await session.getLogs();
-      const output = logs.map((l) => l.getMessage()).join('\n');
+      const output = logs.map((l: Log) => l.getMessage()).join('\n');
       return output.includes('Audio:');
     } catch {
       return false;

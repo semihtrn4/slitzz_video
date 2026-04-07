@@ -143,6 +143,8 @@ export default function EditorScreen() {
       trimStart: adjustSettings.trimStart > 0 ? adjustSettings.trimStart : undefined,
       trimEnd: adjustSettings.trimEnd > 0 ? adjustSettings.trimEnd : undefined,
       speed: adjustSettings.speed,
+      fadeIn: audioSettings.fadeIn,
+      fadeOut: audioSettings.fadeOut,
     };
 
     const outputPath = await exportVideo(config);

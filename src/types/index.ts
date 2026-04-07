@@ -75,6 +75,8 @@ export interface ExportConfig {
   trimStart?: number;
   trimEnd?: number;
   speed?: number;
+  fadeIn?: boolean;
+  fadeOut?: boolean;
 }
 
 export interface TimeSegment {
