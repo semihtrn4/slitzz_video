@@ -189,17 +189,23 @@ export class FFmpegService {
     let videoStream = '[0:v]';
     let audioStream = '[0:a]';
     
-    // Video süresini tahmin et (fade out ve progress için)
-    const rawDuration = config.trimEnd 
-      ? (config.trimEnd - (config.trimStart || 0)) 
-      : 999; // Fallback
-    const estimatedDuration = rawDuration / (config.speed || 1);
+    // Video/Ses süresini kesin olarak tespit et
+    let preciseDuration = config.trimEnd ? (config.trimEnd - (config.trimStart || 0)) : 0;
+    if (preciseDuration === 0) {
+      try {
+        const info = await this.getVideoInfo(config.videoPath);
+        if (info && info.duration) preciseDuration = info.duration;
+        else preciseDuration = 999;
+      } catch {
+        preciseDuration = 999;
+      }
+    }
+    const estimatedDuration = preciseDuration / (config.speed || 1);
 
-    // FIX #1: checkHasAudio artık getLogs() kullanıyor (aşağıda)
     const rawInputPath = stripFileProtocol(ensureAbsolute(config.videoPath));
     const hasAudio = await this.checkHasAudio(config.videoPath);
     const hasVideo = await this.checkHasVideo(config.videoPath);
-    console.log(`[FFmpeg] Video has audio: ${hasAudio}, has video: ${hasVideo}, Input: ${rawInputPath}`);
+    console.log(`[FFmpeg] Video has audio: ${hasAudio}, has video: ${hasVideo}, Exact Duration: ${preciseDuration}`);
 
     if (!hasAudio) {
       filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[a0]; `;
@@ -227,8 +233,8 @@ export class FFmpegService {
     const height = is4K ? baseHeight * 2 : baseHeight;
 
     if (!hasVideo) {
-      // Audio dosyası MP4'e aktarılırken FFmpeg hata vermemesi için siyah boş bir video üretilir
-      filterComplex += `color=c=black:s=${width}x${height}:r=30[v1]; `;
+      // Sınırsız çerçeve üretip FFmpeg belleğinin (Buffer Queue) çökmesini (OOM) önlemek için kesin süre verilir
+      filterComplex += `color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(2)}[v1]; `;
       videoStream = '[v1]';
     } else {
       filterComplex += `${videoStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v1]; `;
@@ -267,7 +273,8 @@ export class FFmpegService {
     }
 
     if (!isPremium && config.watermark) {
-      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[v5]; `;
+      // Android crash (Font eksikliği) engellemek için cihazın ana fontu sisteme kanca atılır
+      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5:fontfile=/system/fonts/Roboto-Regular.ttf[v5]; `;
       videoStream = '[v5]';
     }
 
@@ -344,10 +351,8 @@ export class FFmpegService {
       return outputPath;
     } else {
       const logs = await session.getLogs();
-      // En son log her zaman açıklayıcı olmayabilir, tümünü join edip hatayı arayalım
-      const allLogs = logs.map((l: Log) => l.getMessage()).join('\n');
-      const failMessage = logs.length > 0 ? logs[logs.length - 1].getMessage() : 'No log output available';
-      console.error('[FFmpeg] Export failed. Total output:', allLogs);
+      const failMessage = logs.length > 0 ? logs[logs.length - 1].getMessage() : await session.getFailStackTrace() || 'No log output available (Native Crash or Missing Stream)';
+      console.error('[FFmpeg] Export failed natively. Session State:', await session.getState());
       throw new Error(`FFmpeg export failed: ${failMessage}`);
     }
   }
