@@ -209,7 +209,7 @@ export class FFmpegService {
       filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[a0]; `;
       audioStream = '[a0]';
     } else {
-      filterComplex += `[0:a]acopy[a0]; `;
+      filterComplex += `[0:a]anull[a0]; `;
       audioStream = '[a0]';
     }
 
@@ -305,7 +305,7 @@ export class FFmpegService {
       filterComplex += `[1:a]${musicFilter}[v_music]; `;
       filterComplex += `[v_orig][v_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`;
     } else {
-      filterComplex += `[v_orig]acopy[outa]`;
+      filterComplex += `[v_orig]anull[outa]`;
     }
 
     const args = ['-i', rawInputPath];
