@@ -1,5 +1,4 @@
-import * as FileSystem from 'expo-file-system';
-import { File, Directory, Paths } from 'expo-file-system';
+import { Directory, Paths, File } from 'expo-file-system';
 import type { SubtitleSegment } from '../types';
 
 import { getPath, ensureAbsolute } from '../utils/pathUtils';
@@ -42,25 +41,22 @@ export class TranscriptionService {
     if (!dir.exists) {
       dir.create();
     }
+    
     console.log('[Whisper] Downloading model to:', modelPath);
-    const downloadResumable = FileSystem.createDownloadResumable(
-      MODEL_URL,
-      modelPath,
-      { headers: { 'User-Agent': 'Mozilla/5.0' } },
-      (downloadProgress) => {
-        const { totalBytesWritten, totalBytesExpectedToWrite } = downloadProgress;
-        if (totalBytesExpectedToWrite > 0) {
-          onProgress?.(totalBytesWritten / totalBytesExpectedToWrite);
-        }
-      }
-    );
-    const result = await downloadResumable.downloadAsync();
-    if (!result || !result.uri) {
-      throw new Error('[Whisper] Download failed: no result returned');
+    onProgress?.(0.1); // Indication of start
+
+    const targetFile = new File(modelPath);
+    try {
+      // Use modern download API
+      await File.downloadFileAsync(MODEL_URL, targetFile);
+      onProgress?.(1);
+    } catch (err) {
+      console.error('[Whisper] Download error:', err);
+      throw new Error(`[Whisper] Download failed: ${err}`);
     }
-    const f = new File(modelPath);
-    if (!f.exists || (f.size ?? 0) < 1000000) {
-      try { f.delete(); } catch { /* ignore */ }
+
+    if (!targetFile.exists || targetFile.size < 1000000) {
+      try { targetFile.delete(); } catch { /* ignore */ }
       throw new Error('[Whisper] Download verification failed: file is corrupt or too small');
     }
     this._modelPath = modelPath;
@@ -164,9 +160,10 @@ export class TranscriptionService {
     if (!dir.exists) {
       dir.create();
     }
-    const srtPath = tempDir + `subtitles_${Date.now()}.srt`;
+    const srtPath = getPath(tempDir, `subtitles_${Date.now()}.srt`);
     const srtContent = buildSRTContent(segments);
-    await FileSystem.writeAsStringAsync(srtPath, srtContent);
+    const srtFile = new File(srtPath);
+    srtFile.write(srtContent);
     return srtPath;
   }
 
@@ -272,7 +269,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       events += `Dialogue: 0,${formatTime(seg.start)},${formatTime(seg.end)},Default,,0,0,0,,${seg.text}\n`;
     });
 
-    await FileSystem.writeAsStringAsync(assPath, assHeader + events);
+    const assFile = new File(assPath);
+    assFile.write(assHeader + events);
     return assPath;
   }
 }

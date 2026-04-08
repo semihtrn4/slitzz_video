@@ -5,9 +5,8 @@
 export const getPath = (base: string | { uri: string } | null | undefined, sub: string): string => {
   if (!base) return sub;
   const baseUri = typeof base === 'string' ? base : base.uri;
-  const cleanBase = baseUri.endsWith('/') ? baseUri : `${baseUri}/`;
-  const cleanSub = sub.startsWith('/') ? sub.substring(1) : sub;
-  return ensureAbsolute(`${cleanBase}${cleanSub}`);
+  const separator = baseUri.endsWith('/') ? '' : '/';
+  return `${baseUri}${separator}${sub}`;
 };
 
 /**

@@ -146,10 +146,9 @@ export default function CreateScreen() {
       const destUri = getPath(projectsDir, fileName);
       
       console.log('[Create] Copying from:', selectedVideo.uri, 'to:', destUri);
-      await FileSystem.copyAsync({
-        from: selectedVideo.uri,
-        to: destUri
-      });
+      const sourceFile = new File(selectedVideo.uri);
+      const destFile = new File(destUri);
+      sourceFile.copy(destFile);
 
       // Generate thumbnail
       const thumbnailPath = await ffmpegService.generateThumbnail(destUri, 0);

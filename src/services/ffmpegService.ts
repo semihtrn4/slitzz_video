@@ -1,6 +1,5 @@
 // @ts-ignore - ffmpeg-kit-react-native is aliased to kroog-ffmpeg-kit-react-native and its d.ts is not structured as a module
 import { FFmpegKit, ReturnCode, FFmpegKitConfig, Log, Statistics } from 'ffmpeg-kit-react-native';
-import * as FileSystem from 'expo-file-system';
 import { Directory, Paths } from 'expo-file-system';
 import { silenceService } from './silenceService';
 import { getPath, ensureAbsolute } from '../utils/pathUtils';
