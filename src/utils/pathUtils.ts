@@ -30,6 +30,13 @@ export const ensureAbsolute = (path: string): string => {
  */
 export const stripFileProtocol = (path: string): string => {
   if (!path) return '';
-  if (path.startsWith('file://')) return path.slice(7);
-  return path;
+  let cleanPath = path;
+  if (cleanPath.startsWith('file://')) {
+    cleanPath = cleanPath.slice(7);
+  }
+  try {
+    return decodeURIComponent(cleanPath);
+  } catch {
+    return cleanPath;
+  }
 };

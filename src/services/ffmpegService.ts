@@ -165,7 +165,7 @@ export class FFmpegService {
     const exportsDir = getPath(Paths.document, 'exports/');
     const dir = new Directory(exportsDir);
     if (!dir.exists) {
-      dir.create();
+      dir.create({ intermediates: true });
     }
 
     const outputPath = getPath(exportsDir, `BlitzCut_${Date.now()}.mp4`);

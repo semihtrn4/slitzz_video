@@ -39,7 +39,7 @@ export class TranscriptionService {
 
     const dir = new Directory(modelDir);
     if (!dir.exists) {
-      dir.create();
+      dir.create({ intermediates: true });
     }
     
     console.log('[Whisper] Downloading model to:', modelPath);
@@ -158,7 +158,7 @@ export class TranscriptionService {
     const tempDir = getPath(Paths.cache, 'temp/');
     const dir = new Directory(tempDir);
     if (!dir.exists) {
-      dir.create();
+      dir.create({ intermediates: true });
     }
     const srtPath = getPath(tempDir, `subtitles_${Date.now()}.srt`);
     const srtContent = buildSRTContent(segments);
