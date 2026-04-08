@@ -113,46 +113,59 @@ export class FFmpegService {
     const rawOutputPath = stripFileProtocol(outputPath);
     console.log('[FFmpeg] Removing silences, generating:', rawOutputPath);
 
-    // FIX #2: Ses akışı olup olmadığını kontrol et
+    // FIX #2: Ses ve Video akışı olup olmadığını kontrol et
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
     const hasAudio = await this.checkHasAudio(absVideoPath);
+    const hasVideo = await this.checkHasVideo(absVideoPath);
 
     let filter = '';
-    let vStreams = '';
+    let streams = '';
 
-    if (hasAudio) {
+    if (hasVideo && hasAudio) {
       // Video + Audio concat
       keepSegments.forEach((seg, i) => {
         filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
         filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
-        vStreams += `[v${i}][a${i}]`;
+        streams += `[v${i}][a${i}]`;
       });
-      filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
+      filter += `${streams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
 
       const session = await FFmpegKit.execute(
         `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${rawOutputPath}"`
       );
-      if (ReturnCode.isSuccess(await session.getReturnCode())) {
-        return outputPath;
-      } else {
-        throw new Error('FFmpeg silence removal failed');
-      }
-    } else {
+      if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
+      throw new Error('FFmpeg silence removal failed (Audio+Video)');
+
+    } else if (hasVideo && !hasAudio) {
       // Sadece video (ses yok)
       keepSegments.forEach((seg, i) => {
         filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
-        vStreams += `[v${i}]`;
+        streams += `[v${i}]`;
       });
-      filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=0[v]`;
+      filter += `${streams}concat=n=${keepSegments.length}:v=1:a=0[v]`;
 
       const session = await FFmpegKit.execute(
         `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -c:v libx264 -preset superfast -an -y "${rawOutputPath}"`
       );
-      if (ReturnCode.isSuccess(await session.getReturnCode())) {
-        return outputPath;
-      } else {
-        throw new Error('FFmpeg silence removal (no audio) failed');
-      }
+      if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
+      throw new Error('FFmpeg silence removal failed (Video Only)');
+      
+    } else if (!hasVideo && hasAudio) {
+      // Sadece Ses (video yok)
+      keepSegments.forEach((seg, i) => {
+        filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
+        streams += `[a${i}]`;
+      });
+      filter += `${streams}concat=n=${keepSegments.length}:v=0:a=1[a]`;
+
+      const session = await FFmpegKit.execute(
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[a]" -c:v copy -y "${rawOutputPath}"`
+      );
+      if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
+      throw new Error('FFmpeg silence removal failed (Audio Only)');
+      
+    } else {
+      throw new Error('File has neither audio nor video streams');
     }
   }
 
@@ -185,7 +198,8 @@ export class FFmpegService {
     // FIX #1: checkHasAudio artık getLogs() kullanıyor (aşağıda)
     const rawInputPath = stripFileProtocol(ensureAbsolute(config.videoPath));
     const hasAudio = await this.checkHasAudio(config.videoPath);
-    console.log(`[FFmpeg] Video has audio: ${hasAudio}, Input: ${rawInputPath}`);
+    const hasVideo = await this.checkHasVideo(config.videoPath);
+    console.log(`[FFmpeg] Video has audio: ${hasAudio}, has video: ${hasVideo}, Input: ${rawInputPath}`);
 
     if (!hasAudio) {
       filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[a0]; `;
@@ -212,8 +226,14 @@ export class FFmpegService {
     const width = is4K ? baseWidth * 2 : baseWidth;
     const height = is4K ? baseHeight * 2 : baseHeight;
 
-    filterComplex += `${videoStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v1]; `;
-    videoStream = '[v1]';
+    if (!hasVideo) {
+      // Audio dosyası MP4'e aktarılırken FFmpeg hata vermemesi için siyah boş bir video üretilir
+      filterComplex += `color=c=black:s=${width}x${height}:r=30[v1]; `;
+      videoStream = '[v1]';
+    } else {
+      filterComplex += `${videoStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v1]; `;
+      videoStream = '[v1]';
+    }
 
     if (config.trimStart !== undefined || config.trimEnd !== undefined) {
       const start = config.trimStart || 0;
@@ -376,6 +396,19 @@ export class FFmpegService {
       const logs = await session.getLogs();
       const output = logs.map((l: Log) => l.getMessage()).join('\n');
       return output.includes('Audio:');
+    } catch {
+      return false;
+    }
+  }
+
+  async checkHasVideo(videoPath: string): Promise<boolean> {
+    await this.ensureLogCallback();
+    try {
+      const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
+      const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
+      const logs = await session.getLogs();
+      const output = logs.map((l: Log) => l.getMessage()).join('\n');
+      return output.includes('Video:');
     } catch {
       return false;
     }

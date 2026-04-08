@@ -47,8 +47,12 @@ export class TranscriptionService {
 
     const targetFile = new File(modelPath);
     try {
-      // Use modern download API
-      await File.downloadFileAsync(MODEL_URL, targetFile);
+      // Use modern download API with headers to pass HuggingFace potential protections
+      await File.downloadFileAsync(MODEL_URL, targetFile, {
+        headers: {
+          'User-Agent': 'BlitzCut-App/1.0',
+        }
+      });
       onProgress?.(1);
     } catch (err) {
       console.error('[Whisper] Download error:', err);
@@ -145,8 +149,8 @@ export class TranscriptionService {
       return [];
     }
 
-    // [Pro] Automatically split segments into 1-2 words for the UI and Export
-    console.log('[Whisper] Splitting segments into 1-2 words...');
+    // [Pro] Automatically split segments into 1 word for the UI and Export
+    console.log('[Whisper] Splitting segments into 1 words...');
     const splitSegments = this.splitSegmentsIntoWords(segments);
 
     onProgress?.('Complete');
@@ -168,7 +172,7 @@ export class TranscriptionService {
   }
 
   /**
-   * Splits long segments into smaller chunks (1-2 words per segment)
+   * Splits long segments into smaller chunks (1 word per segment)
    * This is critical for short-form video formats (TikTok/Reels).
    */
   splitSegmentsIntoWords(segments: SubtitleSegment[]): SubtitleSegment[] {
@@ -179,19 +183,19 @@ export class TranscriptionService {
       if (!seg.words || seg.words.length === 0) {
         // Fallback for segments without word-level timestamps
         const words = seg.text.split(' ');
-        if (words.length <= 2) {
+        if (words.length <= 1) {
           newSegments.push(seg);
         } else {
           // Rudimentary splitting if no word-level timestamps available
           const duration = seg.end - seg.start;
           const timePerWord = duration / words.length;
-          for (let i = 0; i < words.length; i += 2) {
-            const pair = words.slice(i, i + 2).join(' ');
+          for (let i = 0; i < words.length; i += 1) {
+            const word = words[i];
             newSegments.push({
               id: `wseg_${idCounter++}`,
               start: seg.start + (i * timePerWord),
-              end: seg.start + (Math.min(i + 2, words.length) * timePerWord),
-              text: pair
+              end: seg.start + ((i + 1) * timePerWord),
+              text: word
             });
           }
         }
@@ -199,15 +203,17 @@ export class TranscriptionService {
       }
 
       // Pro splitting using actual word timestamps
-      for (let i = 0; i < seg.words.length; i += 2) {
-        const wordPair = seg.words.slice(i, i + 2);
-        const text = wordPair.map(w => w.word.trim()).join(' ');
-        newSegments.push({
-          id: `wseg_${idCounter++}`,
-          start: wordPair[0].start,
-          end: wordPair[wordPair.length - 1].end,
-          text
-        });
+      for (let i = 0; i < seg.words.length; i += 1) {
+        const wordObj = seg.words[i];
+        const text = wordObj.word.trim();
+        if (text) {
+          newSegments.push({
+            id: `wseg_${idCounter++}`,
+            start: wordObj.start,
+            end: wordObj.end,
+            text
+          });
+        }
       }
     });
 
