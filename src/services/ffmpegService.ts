@@ -113,10 +113,11 @@ export class FFmpegService {
     const rawOutputPath = stripFileProtocol(outputPath);
     console.log('[FFmpeg] Removing silences, generating:', rawOutputPath);
 
-    // FIX #2: Ses ve Video akışı olup olmadığını kontrol et
+    // FIX #2: Ses ve Video akışı olup olmadığını tek seferde (unified probe) kontrol et
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
-    const hasAudio = await this.checkHasAudio(absVideoPath);
-    const hasVideo = await this.checkHasVideo(absVideoPath);
+    const info = await this.getVideoInfo(absVideoPath);
+    const hasAudio = info.hasAudio;
+    const hasVideo = info.hasVideo;
 
     let filter = '';
     let streams = '';
@@ -159,7 +160,7 @@ export class FFmpegService {
       filter += `${streams}concat=n=${keepSegments.length}:v=0:a=1[a]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[a]" -c:v copy -y "${rawOutputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[a]" -c:a aac -y "${rawOutputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
       throw new Error('FFmpeg silence removal failed (Audio Only)');
@@ -189,29 +190,26 @@ export class FFmpegService {
     let videoStream = '[0:v]';
     let audioStream = '[0:a]';
     
+    const rawInputPath = stripFileProtocol(ensureAbsolute(config.videoPath));
+    const info = await this.getVideoInfo(rawInputPath);
+
     // Video/Ses süresini kesin olarak tespit et
     let preciseDuration = config.trimEnd ? (config.trimEnd - (config.trimStart || 0)) : 0;
     if (preciseDuration === 0) {
-      try {
-        const info = await this.getVideoInfo(config.videoPath);
-        if (info && info.duration) preciseDuration = info.duration;
-        else preciseDuration = 999;
-      } catch {
-        preciseDuration = 999;
-      }
+      if (info && info.duration) preciseDuration = info.duration;
+      else preciseDuration = 999;
     }
     const estimatedDuration = preciseDuration / (config.speed || 1);
 
-    const rawInputPath = stripFileProtocol(ensureAbsolute(config.videoPath));
-    const hasAudio = await this.checkHasAudio(config.videoPath);
-    const hasVideo = await this.checkHasVideo(config.videoPath);
+    const hasAudio = info.hasAudio;
+    const hasVideo = info.hasVideo;
     console.log(`[FFmpeg] Video has audio: ${hasAudio}, has video: ${hasVideo}, Exact Duration: ${preciseDuration}`);
 
     if (!hasAudio) {
       filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[a0]; `;
       audioStream = '[a0]';
     } else {
-      filterComplex += `[0:a]anull[a0]; `;
+      filterComplex += `[0:a]acopy[a0]; `;
       audioStream = '[a0]';
     }
 
@@ -273,8 +271,8 @@ export class FFmpegService {
     }
 
     if (!isPremium && config.watermark) {
-      // Android crash (Font eksikliği) engellemek için cihazın ana fontu sisteme kanca atılır
-      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5:fontfile=/system/fonts/Roboto-Regular.ttf[v5]; `;
+      // Android crash (Font eksikliği) engellemek için fontfile parametresi kaldırıldı, sistem ana fontu devreye girer
+      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[v5]; `;
       videoStream = '[v5]';
     }
 
@@ -307,7 +305,7 @@ export class FFmpegService {
       filterComplex += `[1:a]${musicFilter}[v_music]; `;
       filterComplex += `[v_orig][v_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`;
     } else {
-      filterComplex += `[v_orig]anull[outa]`;
+      filterComplex += `[v_orig]acopy[outa]`;
     }
 
     const args = ['-i', rawInputPath];
@@ -343,8 +341,8 @@ export class FFmpegService {
     const session = await FFmpegKit.executeWithArguments(args);
     const returnCode = await session.getReturnCode();
 
-    // Callback'i temizle
-    FFmpegKitConfig.enableStatisticsCallback(null as any);
+    // Callback'i temizle, iOS/Android Crash olmaması için undefined geçilir (null as any yasak)
+    FFmpegKitConfig.enableStatisticsCallback(undefined);
 
     if (ReturnCode.isSuccess(returnCode)) {
       onProgress?.(1, 'Complete');
@@ -362,60 +360,61 @@ export class FFmpegService {
     width: number;
     height: number;
     fps: number;
+    hasAudio: boolean;
+    hasVideo: boolean;
   }> {
     await this.ensureLogCallback();
-    const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
-    const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
-    // FIX #1: getVideoInfo de getLogs() kullanmalı
-    const logs = await session.getLogs();
-    const output = logs.map((l: Log) => l.getMessage()).join('\n');
-
-    const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
-    let duration = 0;
-    if (durationMatch) {
-      duration =
-        parseInt(durationMatch[1]) * 3600 +
-        parseInt(durationMatch[2]) * 60 +
-        parseInt(durationMatch[3]) +
-        parseInt(durationMatch[4]) / 100;
-    }
-
-    // Parse resolution
-    const resMatch = output.match(/(\d{2,4})x(\d{2,4})/);
-    const w = resMatch ? parseInt(resMatch[1]) : 1080;
-    const h = resMatch ? parseInt(resMatch[2]) : 1920;
-
-    // Parse fps
-    const fpsMatch = output.match(/(\d+(?:\.\d+)?) fps/);
-    const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
-
-    return { duration, width: w, height: h, fps };
-  }
-
-  // FIX #1: getLogs() ile stderr'i oku, getOutput() değil
-  async checkHasAudio(videoPath: string): Promise<boolean> {
-    await this.ensureLogCallback();
     try {
       const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
       const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
+      // FIX #1: getVideoInfo de getLogs() kullanmalı, tek oturumda genel tarama (Probe)
       const logs = await session.getLogs();
       const output = logs.map((l: Log) => l.getMessage()).join('\n');
-      return output.includes('Audio:');
+
+      const hasAudio = output.includes('Audio:');
+      const hasVideo = output.includes('Video:');
+
+      const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
+      let duration = 0;
+      if (durationMatch) {
+        duration =
+          parseInt(durationMatch[1]) * 3600 +
+          parseInt(durationMatch[2]) * 60 +
+          parseInt(durationMatch[3]) +
+          parseInt(durationMatch[4]) / 100;
+      }
+
+      // Parse resolution
+      const resMatch = output.match(/(\d{2,4})x(\d{2,4})/);
+      const w = resMatch ? parseInt(resMatch[1]) : 1080;
+      const h = resMatch ? parseInt(resMatch[2]) : 1920;
+
+      // Parse fps
+      const fpsMatch = output.match(/(\d+(?:\.\d+)?) fps/);
+      const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
+
+      return { duration, width: w, height: h, fps, hasAudio, hasVideo };
     } catch {
-      return false;
+      return { duration: 0, width: 1080, height: 1920, fps: 30, hasAudio: false, hasVideo: false };
     }
   }
 
-  async checkHasVideo(videoPath: string): Promise<boolean> {
-    await this.ensureLogCallback();
+  // Cihaz belleğinin şişmesini önlemek için önbellek çöp atma rutini
+  async clearCache(): Promise<void> {
     try {
-      const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
-      const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
-      const logs = await session.getLogs();
-      const output = logs.map((l: Log) => l.getMessage()).join('\n');
-      return output.includes('Video:');
-    } catch {
-      return false;
+      console.log('[FFmpeg] Clearing local cache files...');
+      const cacheDir = new Directory(Paths.cache);
+      if (cacheDir.exists) {
+        // Expo's new Directory object doesn't have a standardized clear command natively built to delete inner files easily via an object iterator unless we use legacy,
+        // Since Expo API v19+ Directory doesn't expose easy child iteration yet via standard .delete, we will delete and optionally recreate the directory if we depend on it.
+        try {
+          cacheDir.delete();
+          // We don't have to recreate it as ensure intermediates: true is used where needed.
+        } catch {}
+      }
+      console.log('[FFmpeg] Local cache cleared.');
+    } catch (err) {
+      console.warn('[FFmpeg] Cache clear failed', err);
     }
   }
 }
