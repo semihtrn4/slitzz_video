@@ -1,7 +1,7 @@
 import { Directory, Paths, File } from 'expo-file-system';
 import type { SubtitleSegment } from '../types';
 
-import { getPath, ensureAbsolute } from '../utils/pathUtils';
+import { getPath, ensureAbsolute, stripFileProtocol } from '../utils/pathUtils';
 
 export class TranscriptionService {
   private static instance: TranscriptionService;
@@ -100,8 +100,8 @@ export class TranscriptionService {
 
     onProgress?.('Transcribing audio...');
 
-    // Ensure audioPath is absolute
-    const absAudioPath = ensureAbsolute(audioPath);
+    // Ensure audioPath is absolute and raw for native whisper
+    const absAudioPath = stripFileProtocol(ensureAbsolute(audioPath));
 
     // ctx.transcribe returns { stop, promise }
     const { promise } = ctx.transcribe(absAudioPath, {

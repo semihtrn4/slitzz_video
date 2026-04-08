@@ -2,7 +2,7 @@
 import { FFmpegKit, ReturnCode, FFmpegKitConfig, Log, Statistics } from 'ffmpeg-kit-react-native';
 import { Directory, Paths } from 'expo-file-system';
 import { silenceService } from './silenceService';
-import { getPath, ensureAbsolute } from '../utils/pathUtils';
+import { getPath, ensureAbsolute, stripFileProtocol } from '../utils/pathUtils';
 import type { SilenceSegment, TimeSegment, ExportConfig } from '../types';
 
 export class FFmpegService {
@@ -35,13 +35,14 @@ export class FFmpegService {
     const audioPath = getPath(Paths.cache, `extracted_audio_${Date.now()}.${ext}`);
     console.log('[FFmpeg] Extracting audio to:', audioPath);
 
-    const absVideoPath = ensureAbsolute(videoPath);
+    const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
+    const rawAudioPath = stripFileProtocol(audioPath);
     let command = '';
     if (forWhisper) {
-      command = `-i "${absVideoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${audioPath}"`;
+      command = `-i "${absVideoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${rawAudioPath}"`;
     } else {
-      command = `-i "${absVideoPath}" -vn -acodec copy -y "${audioPath}"`;
+      command = `-i "${absVideoPath}" -vn -acodec copy -y "${rawAudioPath}"`;
     }
 
     const session = await FFmpegKit.execute(command);
@@ -58,12 +59,13 @@ export class FFmpegService {
   async generateThumbnail(videoPath: string, timeSeconds: number): Promise<string> {
     await this.ensureLogCallback();
     const thumbnailPath = getPath(Paths.cache, `thumb_${Date.now()}.jpg`);
-    console.log('[FFmpeg] Generating thumbnail at:', thumbnailPath);
+    const rawThumbnailPath = stripFileProtocol(thumbnailPath);
+    console.log('[FFmpeg] Generating thumbnail at:', rawThumbnailPath);
 
-    const absVideoPath = ensureAbsolute(videoPath);
+    const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
     const session = await FFmpegKit.execute(
-      `-ss ${timeSeconds} -i "${absVideoPath}" -vframes 1 -q:v 2 -y "${thumbnailPath}"`
+      `-ss ${timeSeconds} -i "${absVideoPath}" -vframes 1 -q:v 2 -y "${rawThumbnailPath}"`
     );
     const returnCode = await session.getReturnCode();
 
@@ -82,8 +84,9 @@ export class FFmpegService {
     await this.ensureLogCallback();
     console.log('[FFmpeg] Detecting silences...');
 
+    const rawAudioPath = stripFileProtocol(audioPath);
     const session = await FFmpegKit.execute(
-      `-i "${audioPath}" -af silencedetect=n=${threshold}dB:d=${minDuration} -f null -`
+      `-i "${rawAudioPath}" -af silencedetect=n=${threshold}dB:d=${minDuration} -f null -`
     );
 
     // FIX #1    // silencedetect -f null - komutu genellikle non-zero döner, output'a bakarak karar ver
@@ -107,10 +110,11 @@ export class FFmpegService {
     if (keepSegments.length === 0) return videoPath;
 
     const outputPath = getPath(Paths.cache, `cut_${Date.now()}.mp4`);
-    console.log('[FFmpeg] Removing silences, generating:', outputPath);
+    const rawOutputPath = stripFileProtocol(outputPath);
+    console.log('[FFmpeg] Removing silences, generating:', rawOutputPath);
 
     // FIX #2: Ses akışı olup olmadığını kontrol et
-    const absVideoPath = ensureAbsolute(videoPath);
+    const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
     const hasAudio = await this.checkHasAudio(absVideoPath);
 
     let filter = '';
@@ -126,7 +130,7 @@ export class FFmpegService {
       filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${outputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${rawOutputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) {
         return outputPath;
@@ -142,7 +146,7 @@ export class FFmpegService {
       filter += `${vStreams}concat=n=${keepSegments.length}:v=1:a=0[v]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -c:v libx264 -preset superfast -an -y "${outputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -c:v libx264 -preset superfast -an -y "${rawOutputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) {
         return outputPath;
@@ -165,6 +169,7 @@ export class FFmpegService {
     }
 
     const outputPath = getPath(exportsDir, `BlitzCut_${Date.now()}.mp4`);
+    const rawOutputPath = stripFileProtocol(outputPath);
     onProgress?.(0.1, 'Preparing export...');
 
     let filterComplex = '';
@@ -178,8 +183,9 @@ export class FFmpegService {
     const estimatedDuration = rawDuration / (config.speed || 1);
 
     // FIX #1: checkHasAudio artık getLogs() kullanıyor (aşağıda)
+    const rawInputPath = stripFileProtocol(ensureAbsolute(config.videoPath));
     const hasAudio = await this.checkHasAudio(config.videoPath);
-    console.log(`[FFmpeg] Video has audio: ${hasAudio}`);
+    console.log(`[FFmpeg] Video has audio: ${hasAudio}, Input: ${rawInputPath}`);
 
     if (!hasAudio) {
       filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[a0]; `;
@@ -234,7 +240,7 @@ export class FFmpegService {
 
     if (config.srtPath && config.includeSubtitles) {
       // FFmpeg subtitles filtresi file:// protokolünü sevmez, ham yol bekler
-      const rawSrtPath = config.srtPath.replace('file://', '');
+      const rawSrtPath = stripFileProtocol(config.srtPath);
       const srtPathEscaped = rawSrtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
       filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[v4]; `;
       videoStream = '[v4]';
@@ -277,11 +283,10 @@ export class FFmpegService {
       filterComplex += `[v_orig]anull[outa]`;
     }
 
-    const absVideoPath = ensureAbsolute(config.videoPath);
-    const args = ['-i', absVideoPath];
+    const args = ['-i', rawInputPath];
 
     if (config.musicPath) {
-      const absMusicPath = ensureAbsolute(config.musicPath);
+      const absMusicPath = stripFileProtocol(ensureAbsolute(config.musicPath));
       args.push('-stream_loop', '-1', '-i', absMusicPath);
     }
 
@@ -295,7 +300,7 @@ export class FFmpegService {
 
     // FIX #3: bitrate kontrolü is4K ile tutarlı
     args.push('-b:v', is4K ? '10M' : '5M');
-    args.push('-shortest', '-y', outputPath);
+    args.push('-shortest', '-y', rawOutputPath);
 
     console.log('[FFmpeg] Exporting with arguments:', JSON.stringify(args));
 
@@ -319,8 +324,10 @@ export class FFmpegService {
       return outputPath;
     } else {
       const logs = await session.getLogs();
-      const failMessage = logs.length > 0 ? logs[logs.length - 1].getMessage() : 'Unknown FFmpeg error';
-      console.error('[FFmpeg] Export failed:', failMessage);
+      // En son log her zaman açıklayıcı olmayabilir, tümünü join edip hatayı arayalım
+      const allLogs = logs.map((l: Log) => l.getMessage()).join('\n');
+      const failMessage = logs.length > 0 ? logs[logs.length - 1].getMessage() : 'No log output available';
+      console.error('[FFmpeg] Export failed. Total output:', allLogs);
       throw new Error(`FFmpeg export failed: ${failMessage}`);
     }
   }
@@ -332,7 +339,7 @@ export class FFmpegService {
     fps: number;
   }> {
     await this.ensureLogCallback();
-    const absVideoPath = ensureAbsolute(videoPath);
+    const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
     const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
     // FIX #1: getVideoInfo de getLogs() kullanmalı
     const logs = await session.getLogs();
@@ -364,7 +371,7 @@ export class FFmpegService {
   async checkHasAudio(videoPath: string): Promise<boolean> {
     await this.ensureLogCallback();
     try {
-      const absVideoPath = ensureAbsolute(videoPath);
+      const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
       const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
       const logs = await session.getLogs();
       const output = logs.map((l: Log) => l.getMessage()).join('\n');
