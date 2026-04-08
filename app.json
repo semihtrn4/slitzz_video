@@ -17,10 +17,10 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.slitzcut.app",
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Videolarınızı kamera rulosuna kaydetmek için",
+        "NSPhotoLibraryUsageDescription": "SlitzCut videolarını galerine kaydetmek için fotoğraf kütüphanesi erişimi gerekiyor.",
+        "NSPhotoLibraryAddUsageDescription": "Düzenlenen videoları galerine kaydetmek için izin gerekiyor.",
         "NSMicrophoneUsageDescription": "Sesinizi yazıya dökmek ve transkripsiyon için mikrofon erişimi gereklidir.",
-        "NSCameraUsageDescription": "Video çekimi için kamera erişimi",
-        "NSPhotoLibraryAddUsageDescription": "Videolarınızı kaydetmek için gereklidir."
+        "NSCameraUsageDescription": "Video çekimi için kamera erişimi gereklidir."
       }
     },
     "android": {
@@ -52,7 +52,14 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-media-library",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "SlitzCut videolarını galerine kaydetmek için erişim istiyor.",
+          "savePhotosPermission": "Düzenlenen videoları galerine kaydetmek için izin gerekiyor.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
       "expo-av",
       "expo-image-picker",
       [

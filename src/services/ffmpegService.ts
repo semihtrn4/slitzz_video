@@ -1,4 +1,4 @@
-// @ts-ignore - ffmpeg-kit-react-native is aliased to kroog-ffmpeg-kit-react-native and its d.ts is not structured as a module
+// @ts-ignore
 import { FFmpegKit, ReturnCode, FFmpegKitConfig, Log, Statistics } from 'ffmpeg-kit-react-native';
 import { Directory, Paths } from 'expo-file-system';
 import { silenceService } from './silenceService';
@@ -33,11 +33,9 @@ export class FFmpegService {
     await this.ensureLogCallback();
     const ext = forWhisper ? 'wav' : 'm4a';
     const audioPath = getPath(Paths.cache, `extracted_audio_${Date.now()}.${ext}`);
-    console.log('[FFmpeg] Extracting audio to:', audioPath);
-
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
-
     const rawAudioPath = stripFileProtocol(audioPath);
+
     let command = '';
     if (forWhisper) {
       command = `-i "${absVideoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${rawAudioPath}"`;
@@ -60,8 +58,6 @@ export class FFmpegService {
     await this.ensureLogCallback();
     const thumbnailPath = getPath(Paths.cache, `thumb_${Date.now()}.jpg`);
     const rawThumbnailPath = stripFileProtocol(thumbnailPath);
-    console.log('[FFmpeg] Generating thumbnail at:', rawThumbnailPath);
-
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
     const session = await FFmpegKit.execute(
@@ -82,14 +78,11 @@ export class FFmpegService {
     minDuration: number = 0.5
   ): Promise<SilenceSegment[]> {
     await this.ensureLogCallback();
-    console.log('[FFmpeg] Detecting silences...');
-
     const rawAudioPath = stripFileProtocol(audioPath);
     const session = await FFmpegKit.execute(
       `-i "${rawAudioPath}" -af silencedetect=n=${threshold}dB:d=${minDuration} -f null -`
     );
 
-    // FIX #1    // silencedetect -f null - komutu genellikle non-zero döner, output'a bakarak karar ver
     const logs = await session.getLogs();
     const allOutput = logs.map((l: Log) => l.getMessage()).join('\n');
     const returnCode = await session.getReturnCode();
@@ -111,9 +104,6 @@ export class FFmpegService {
 
     const outputPath = getPath(Paths.cache, `cut_${Date.now()}.mp4`);
     const rawOutputPath = stripFileProtocol(outputPath);
-    console.log('[FFmpeg] Removing silences, generating:', rawOutputPath);
-
-    // FIX #2: Ses ve Video akışı olup olmadığını tek seferde (unified probe) kontrol et
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
     const info = await this.getVideoInfo(absVideoPath);
     const hasAudio = info.hasAudio;
@@ -123,48 +113,48 @@ export class FFmpegService {
     let streams = '';
 
     if (hasVideo && hasAudio) {
-      // Video + Audio concat
       keepSegments.forEach((seg, i) => {
         filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
         filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
         streams += `[v${i}][a${i}]`;
       });
-      filter += `${streams}concat=n=${keepSegments.length}:v=1:a=1[v][a]`;
+      filter += `${streams}concat=n=${keepSegments.length}:v=1:a=1[vout][aout]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -map "[a]" -c:v libx264 -preset superfast -y "${rawOutputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[vout]" -map "[aout]" -c:v libx264 -preset superfast -y "${rawOutputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
-      throw new Error('FFmpeg silence removal failed (Audio+Video)');
+      const logs = await session.getLogs();
+      throw new Error(`FFmpeg silence removal failed (Audio+Video): ${logs[logs.length - 1]?.getMessage()}`);
 
     } else if (hasVideo && !hasAudio) {
-      // Sadece video (ses yok)
       keepSegments.forEach((seg, i) => {
         filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
         streams += `[v${i}]`;
       });
-      filter += `${streams}concat=n=${keepSegments.length}:v=1:a=0[v]`;
+      filter += `${streams}concat=n=${keepSegments.length}:v=1:a=0[vout]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[v]" -c:v libx264 -preset superfast -an -y "${rawOutputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[vout]" -c:v libx264 -preset superfast -an -y "${rawOutputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
-      throw new Error('FFmpeg silence removal failed (Video Only)');
-      
+      const logs = await session.getLogs();
+      throw new Error(`FFmpeg silence removal failed (Video Only): ${logs[logs.length - 1]?.getMessage()}`);
+
     } else if (!hasVideo && hasAudio) {
-      // Sadece Ses (video yok)
       keepSegments.forEach((seg, i) => {
         filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
         streams += `[a${i}]`;
       });
-      filter += `${streams}concat=n=${keepSegments.length}:v=0:a=1[a]`;
+      filter += `${streams}concat=n=${keepSegments.length}:v=0:a=1[aout]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[a]" -c:a aac -y "${rawOutputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[aout]" -c:a aac -y "${rawOutputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
-      throw new Error('FFmpeg silence removal failed (Audio Only)');
-      
+      const logs = await session.getLogs();
+      throw new Error(`FFmpeg silence removal failed (Audio Only): ${logs[logs.length - 1]?.getMessage()}`);
+
     } else {
       throw new Error('File has neither audio nor video streams');
     }
@@ -176,6 +166,7 @@ export class FFmpegService {
     onProgress?: (progress: number, step: string) => void
   ): Promise<string> {
     await this.ensureLogCallback();
+
     const exportsDir = getPath(Paths.document, 'exports/');
     const dir = new Directory(exportsDir);
     if (!dir.exists) {
@@ -186,34 +177,18 @@ export class FFmpegService {
     const rawOutputPath = stripFileProtocol(outputPath);
     onProgress?.(0.1, 'Preparing export...');
 
-    let filterComplex = '';
-    let videoStream = '[0:v]';
-    let audioStream = '[0:a]';
-    
     const rawInputPath = stripFileProtocol(ensureAbsolute(config.videoPath));
     const info = await this.getVideoInfo(rawInputPath);
-
-    // Video/Ses süresini kesin olarak tespit et
-    let preciseDuration = config.trimEnd ? (config.trimEnd - (config.trimStart || 0)) : 0;
-    if (preciseDuration === 0) {
-      if (info && info.duration) preciseDuration = info.duration;
-      else preciseDuration = 999;
-    }
-    const estimatedDuration = preciseDuration / (config.speed || 1);
-
     const hasAudio = info.hasAudio;
     const hasVideo = info.hasVideo;
-    console.log(`[FFmpeg] Video has audio: ${hasAudio}, has video: ${hasVideo}, Exact Duration: ${preciseDuration}`);
 
-    if (!hasAudio) {
-      filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100[a0]; `;
-      audioStream = '[a0]';
-    } else {
-      filterComplex += `[0:a]anull[a0]; `;
-      audioStream = '[a0]';
-    }
+    console.log(`[FFmpeg] hasAudio: ${hasAudio}, hasVideo: ${hasVideo}, duration: ${info.duration}`);
 
-    // FIX #3: resolution karşılaştırması tutarlı hale getirildi (hep lowercase)
+    let preciseDuration = config.trimEnd
+      ? config.trimEnd - (config.trimStart || 0)
+      : (info.duration || 999);
+    const estimatedDuration = preciseDuration / (config.speed || 1);
+
     const is4K = config.resolution === '4k';
     let baseWidth = 1080;
     let baseHeight = 1920;
@@ -230,56 +205,75 @@ export class FFmpegService {
     const width = is4K ? baseWidth * 2 : baseWidth;
     const height = is4K ? baseHeight * 2 : baseHeight;
 
+    // ─── FİLTER COMPLEX OLUŞTURMA ───────────────────────────────────────────
+    // KURAL: video akışları [vN], ses akışları [aN] ile adlandırılır. Karışma olmaz.
+    let filterComplex = '';
+    let videoStream = '';
+    let audioStream = '';
+
+    // ── 1. VİDEO KAYNAĞI ──
     if (!hasVideo) {
-      // Sınırsız çerçeve üretip FFmpeg belleğinin (Buffer Queue) çökmesini (OOM) önlemek için kesin süre verilir
-      filterComplex += `color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(2)}[v1]; `;
-      videoStream = '[v1]';
+      filterComplex += `color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(2)}[v0]; `;
+      videoStream = '[v0]';
     } else {
-      filterComplex += `${videoStream}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v1]; `;
-      videoStream = '[v1]';
+      filterComplex += `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v0]; `;
+      videoStream = '[v0]';
     }
 
+    // ── 2. SES KAYNAĞI ──
+    if (!hasAudio) {
+      filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100:d=${preciseDuration.toFixed(2)}[a0]; `;
+      audioStream = '[a0]';
+    } else {
+      filterComplex += `[0:a]anull[a0]; `;
+      audioStream = '[a0]';
+    }
+
+    // ── 3. TRIM ──
     if (config.trimStart !== undefined || config.trimEnd !== undefined) {
       const start = config.trimStart || 0;
       const end = config.trimEnd || 999999;
-      filterComplex += `${videoStream}trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS[v2]; `;
-      videoStream = '[v2]';
+
+      filterComplex += `${videoStream}trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS[v1]; `;
+      videoStream = '[v1]';
+
       filterComplex += `${audioStream}atrim=start=${start.toFixed(3)}:end=${end.toFixed(3)},asetpts=PTS-STARTPTS[a1]; `;
       audioStream = '[a1]';
     }
 
+    // ── 4. SPEED ──
     if (config.speed && config.speed !== 1) {
-      filterComplex += `${videoStream}setpts=${(1 / config.speed).toFixed(4)}*PTS[v3]; `;
-      videoStream = '[v3]';
+      filterComplex += `${videoStream}setpts=${(1 / config.speed).toFixed(4)}*PTS[v2]; `;
+      videoStream = '[v2]';
 
       let s = config.speed;
-      let atempoFilter = '';
-      while (s > 2.0) { atempoFilter += 'atempo=2.0,'; s /= 2.0; }
-      while (s < 0.5) { atempoFilter += 'atempo=0.5,'; s *= 2.0; }
-      atempoFilter += `atempo=${s.toFixed(3)}`;
+      let atempoChain = '';
+      while (s > 2.0) { atempoChain += 'atempo=2.0,'; s /= 2.0; }
+      while (s < 0.5) { atempoChain += 'atempo=0.5,'; s *= 2.0; }
+      atempoChain += `atempo=${s.toFixed(4)}`;
 
-      filterComplex += `${audioStream}${atempoFilter}[a2]; `;
+      filterComplex += `${audioStream}${atempoChain}[a2]; `;
       audioStream = '[a2]';
     }
 
+    // ── 5. SUBTITLES ──
     if (config.srtPath && config.includeSubtitles) {
-      // FFmpeg subtitles filtresi file:// protokolünü sevmez, ham yol bekler
       const rawSrtPath = stripFileProtocol(config.srtPath);
-      const srtPathEscaped = rawSrtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      filterComplex += `${videoStream}subtitles='${srtPathEscaped}'[v4]; `;
+      const srtEscaped = rawSrtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      filterComplex += `${videoStream}subtitles='${srtEscaped}'[v3]; `;
+      videoStream = '[v3]';
+    }
+
+    // ── 6. WATERMARK ──
+    if (!isPremium && config.watermark) {
+      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[v4]; `;
       videoStream = '[v4]';
     }
 
-    if (!isPremium && config.watermark) {
-      // Android crash (Font eksikliği) engellemek için fontfile parametresi kaldırıldı, sistem ana fontu devreye girer
-      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[v5]; `;
-      videoStream = '[v5]';
-    }
-
-    const finalVol = (config.audioVolume / 100).toFixed(2);
+    // ── 7. SES: volume + fade ──
+    const finalVol = (config.audioVolume / 100).toFixed(4);
     let audioFilter = `volume=${finalVol}`;
 
-    // Apply Fade In/Out
     if (config.fadeIn) {
       audioFilter += `,afade=t=in:st=0:d=1`;
     }
@@ -288,12 +282,14 @@ export class FFmpegService {
       audioFilter += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=1`;
     }
 
-    filterComplex += `${audioStream}${audioFilter}[v_orig]; `;
+    // ÖNEMLİ FIX: ses akışı [aN] → [a_orig] (video stream adıyla karışmaz)
+    filterComplex += `${audioStream}${audioFilter}[a_orig]; `;
 
+    // ── 8. MÜZİK MİX ──
     if (config.musicPath && config.musicVolume !== undefined) {
-      const mVol = (config.musicVolume / 100).toFixed(2);
+      const mVol = (config.musicVolume / 100).toFixed(4);
       let musicFilter = `volume=${mVol}`;
-      
+
       if (config.fadeIn) {
         musicFilter += `,afade=t=in:st=0:d=1`;
       }
@@ -302,13 +298,16 @@ export class FFmpegService {
         musicFilter += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=1`;
       }
 
-      filterComplex += `[1:a]${musicFilter}[v_music]; `;
-      filterComplex += `[v_orig][v_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`;
+      // Müzik inputu her zaman [1:a] — stream_loop ile eklendi
+      filterComplex += `[1:a]${musicFilter}[a_music]; `;
+      filterComplex += `[a_orig][a_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`;
     } else {
-      filterComplex += `[v_orig]anull[outa]`;
+      // Müzik yok → sadece orijinal ses
+      filterComplex += `[a_orig]anull[outa]`;
     }
 
-    const args = ['-i', rawInputPath];
+    // ─── ARG LİSTESİ ────────────────────────────────────────────────────────
+    const args: string[] = ['-i', rawInputPath];
 
     if (config.musicPath) {
       const absMusicPath = stripFileProtocol(ensureAbsolute(config.musicPath));
@@ -317,21 +316,24 @@ export class FFmpegService {
 
     args.push(
       '-filter_complex', filterComplex,
-      '-map', videoStream,
-      '-map', '[outa]',
+      '-map', videoStream,   // son video akışı (örn. [v4])
+      '-map', '[outa]',      // karıştırılmış ses akışı
       '-c:v', 'libx264',
-      '-preset', 'fast'
+      '-preset', 'fast',
+      '-b:v', is4K ? '10M' : '5M',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-shortest',
+      '-y',
+      rawOutputPath
     );
 
-    // FIX #3: bitrate kontrolü is4K ile tutarlı
-    args.push('-b:v', is4K ? '10M' : '5M');
-    args.push('-shortest', '-y', rawOutputPath);
+    console.log('[FFmpeg] Export args:', JSON.stringify(args, null, 2));
+    console.log('[FFmpeg] filter_complex:\n', filterComplex);
 
-    console.log('[FFmpeg] Exporting with arguments:', JSON.stringify(args));
-
-    // Progress takibi için statistics callback'i kullan
+    // ─── PROGRESS ───────────────────────────────────────────────────────────
     FFmpegKitConfig.enableStatisticsCallback((stats: Statistics) => {
-      const timeMs = stats.getTime(); // işlenen süre ms
+      const timeMs = stats.getTime();
       if (timeMs > 0 && estimatedDuration > 0) {
         const progress = Math.min(0.9, (timeMs / 1000) / estimatedDuration);
         onProgress?.(0.1 + progress * 0.8, 'Encoding...');
@@ -341,7 +343,6 @@ export class FFmpegService {
     const session = await FFmpegKit.executeWithArguments(args);
     const returnCode = await session.getReturnCode();
 
-    // Callback'i temizle, iOS/Android Crash olmaması için undefined geçilir (null as any yasak)
     FFmpegKitConfig.enableStatisticsCallback(undefined);
 
     if (ReturnCode.isSuccess(returnCode)) {
@@ -349,9 +350,12 @@ export class FFmpegService {
       return outputPath;
     } else {
       const logs = await session.getLogs();
-      const failMessage = logs.length > 0 ? logs[logs.length - 1].getMessage() : await session.getFailStackTrace() || 'No log output available (Native Crash or Missing Stream)';
-      console.error('[FFmpeg] Export failed natively. Session State:', await session.getState());
-      throw new Error(`FFmpeg export failed: ${failMessage}`);
+      const lastLog = logs.length > 0
+        ? logs[logs.length - 1].getMessage()
+        : (await session.getFailStackTrace()) || 'No log output (Native Crash or Missing Stream)';
+      console.error('[FFmpeg] Export failed. Last log:', lastLog);
+      console.error('[FFmpeg] Session state:', await session.getState());
+      throw new Error(`FFmpeg export failed: ${lastLog}`);
     }
   }
 
@@ -367,7 +371,6 @@ export class FFmpegService {
     try {
       const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
       const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
-      // FIX #1: getVideoInfo de getLogs() kullanmalı, tek oturumda genel tarama (Probe)
       const logs = await session.getLogs();
       const output = logs.map((l: Log) => l.getMessage()).join('\n');
 
@@ -384,12 +387,10 @@ export class FFmpegService {
           parseInt(durationMatch[4]) / 100;
       }
 
-      // Parse resolution
       const resMatch = output.match(/(\d{2,4})x(\d{2,4})/);
       const w = resMatch ? parseInt(resMatch[1]) : 1080;
       const h = resMatch ? parseInt(resMatch[2]) : 1920;
 
-      // Parse fps
       const fpsMatch = output.match(/(\d+(?:\.\d+)?) fps/);
       const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
 
@@ -399,20 +400,14 @@ export class FFmpegService {
     }
   }
 
-  // Cihaz belleğinin şişmesini önlemek için önbellek çöp atma rutini
   async clearCache(): Promise<void> {
     try {
-      console.log('[FFmpeg] Clearing local cache files...');
+      console.log('[FFmpeg] Clearing cache...');
       const cacheDir = new Directory(Paths.cache);
       if (cacheDir.exists) {
-        // Expo's new Directory object doesn't have a standardized clear command natively built to delete inner files easily via an object iterator unless we use legacy,
-        // Since Expo API v19+ Directory doesn't expose easy child iteration yet via standard .delete, we will delete and optionally recreate the directory if we depend on it.
-        try {
-          cacheDir.delete();
-          // We don't have to recreate it as ensure intermediates: true is used where needed.
-        } catch {}
+        try { cacheDir.delete(); } catch { }
       }
-      console.log('[FFmpeg] Local cache cleared.');
+      console.log('[FFmpeg] Cache cleared.');
     } catch (err) {
       console.warn('[FFmpeg] Cache clear failed', err);
     }
