@@ -41,7 +41,8 @@ export class FFmpegService {
     if (forWhisper) {
       command = `-i "${absVideoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${rawAudioPath}"`;
     } else {
-      command = `-i "${absVideoPath}" -vn -acodec copy -y "${rawAudioPath}"`;
+      // FIX: -acodec copy yerine -c:a aac kullanarak her türlü kaynak sesi uyumlu hale getir
+      command = `-i "${absVideoPath}" -vn -c:a aac -q:a 2 -y "${rawAudioPath}"`;
     }
 
     const session = await FFmpegKit.execute(command);
@@ -345,7 +346,8 @@ export class FFmpegService {
       fc.push(`[${musicInputIdx}:a]${musicFilters.join(',')}[a_music]`);
       fc.push(`[a_orig][a_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`);
     } else {
-      fc.push(`[a_orig]anull[outa]`);
+      // FIX: anull yerine acopy kullanarak ses akışını güvenli bir şekilde passthrough yap
+      fc.push(`[a_orig]acopy[outa]`);
     }
 
     // filter_complex: tüm parçaları ; ile birleştir

@@ -46,6 +46,13 @@ export function useVideoEditor(project: Project) {
     setProcessingProgress(0);
 
     try {
+      setProcessingStep('probing-video');
+      const info = await ffmpegService.getVideoInfo(project.originalVideoPath);
+      if (!info.hasAudio) {
+        toast.show('This video has no audio to detect silences from.', 'info');
+        return;
+      }
+
       setProcessingStep('extracting-audio');
       const audioPath = await ffmpegService.extractAudio(project.originalVideoPath);
 
@@ -112,6 +119,14 @@ export function useVideoEditor(project: Project) {
     setProcessingProgress(0);
 
     try {
+      const videoPath = project.processedVideoPath || project.originalVideoPath;
+      setProcessingStep('probing-video');
+      const info = await ffmpegService.getVideoInfo(videoPath);
+      if (!info.hasAudio) {
+        toast.show('This video has no audio to transcribe.', 'info');
+        return;
+      }
+
       const hasModel = await transcriptionService.isModelDownloaded();
       if (!hasModel) {
         await transcriptionService.downloadModel((progress) => {
@@ -120,10 +135,7 @@ export function useVideoEditor(project: Project) {
       }
 
       setProcessingStep('extracting-audio');
-      const audioPath = await ffmpegService.extractAudio(
-        project.processedVideoPath || project.originalVideoPath,
-        true
-      );
+      const audioPath = await ffmpegService.extractAudio(videoPath, true);
 
       setProcessingStep('transcribing');
       const segments = await transcriptionService.transcribe(
@@ -136,6 +148,7 @@ export function useVideoEditor(project: Project) {
 
       setSubtitleSegments(segments);
       setProcessingStep('complete');
+      toast.show('Transcription complete!', 'success');
     } catch (error) {
       console.error('Error transcribing:', error);
       toast.show('Failed to transcribe audio', 'error');

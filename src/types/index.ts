@@ -125,6 +125,7 @@ export interface SubscriptionState {
 
 export type ProcessingStep = 
   | 'idle'
+  | 'probing-video'
   | 'extracting-audio'
   | 'detecting-silences'
   | 'transcribing'

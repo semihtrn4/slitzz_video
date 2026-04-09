@@ -98,17 +98,18 @@ export class TranscriptionService {
 
     onProgress?.('Transcribing audio...');
 
-    // CRITICAL FIX: audioPath'i her durumda ham path'e çevir
-    // ffmpegService.extractAudio(forWhisper=true) zaten ham path döndürüyor
-    // ama başka yerden gelirse file:// olabilir — ikisini de handle et
-    const absAudioPath = stripFileProtocol(ensureAbsolute(audioPath));
+    // CRITICAL FIX: whisper.rn RAW PATH bekler ama expo-file-system 19/20 URI (file://) bekler.
+    const fileUri = ensureAbsolute(audioPath);
+    const absAudioPath = stripFileProtocol(fileUri);
+    
+    console.log('[Whisper] fileUri:', fileUri);
     console.log('[Whisper] Raw audio path:', absAudioPath);
 
     // Dosya varlığını kontrol et
     try {
-      const audioFile = new File(absAudioPath);
+      const audioFile = new File(fileUri);
       if (!audioFile.exists) {
-        throw new Error(`Audio file not found at path: ${absAudioPath}`);
+        throw new Error(`Audio file not found at URI: ${fileUri}`);
       }
       console.log('[Whisper] Audio file size:', audioFile.size, 'bytes');
     } catch (fileErr) {
