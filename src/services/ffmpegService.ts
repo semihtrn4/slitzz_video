@@ -250,7 +250,13 @@ export class FFmpegService {
     }
 
     // ── 2. SES KAYNAĞI ──
-    fc.push(`[${audioInputIdx}:a]asetpts=PTS-STARTPTS[a0]`);
+    // hasAudio=true: video=0, ses=[0:a] → asetpts uygula
+    // hasAudio=false: anullsrc=0, video=1 → anullsrc'ye asetpts değil aresample uygula
+    if (hasAudio) {
+      fc.push(`[${videoInputIdx}:a]asetpts=PTS-STARTPTS[a0]`);
+    } else {
+      fc.push(`[0:a]aresample=44100[a0]`);
+    }
     audioStream = '[a0]';
 
     // ── 3. TRIM ──

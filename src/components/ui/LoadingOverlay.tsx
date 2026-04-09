@@ -12,6 +12,7 @@ interface LoadingOverlayProps {
 
 const STEP_LABELS: Record<ProcessingStep, string> = {
   idle: 'Ready',
+  'probing-video': 'Analyzing video...',
   'extracting-audio': 'Extracting audio...',
   'detecting-silences': 'Detecting silences...',
   transcribing: 'Transcribing...',
@@ -19,7 +20,7 @@ const STEP_LABELS: Record<ProcessingStep, string> = {
   'applying-cuts': 'Applying cuts...',
   'burning-subtitles': 'Burning subtitles...',
   encoding: 'Encoding video...',
-  exporting: 'Exporting...',
+  exporting: 'Saving to gallery...',
   complete: 'Complete!',
   error: 'Error occurred',
 };

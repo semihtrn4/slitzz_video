@@ -94,14 +94,17 @@ export default function EditorScreen() {
     exportVideo,
   } = useVideoEditor(safeProject);
 
-  // FIX #5: Proje değişince editör state'ini sıfırla
+  // FIX: Sadece farklı proje açılınca reset et — aynı projede geri gidip gelince state silinmesin
   useEffect(() => {
     if (project) {
       const store = useEditorStore.getState();
-      store.resetEditor();
-      store.setCurrentProject(project);
-      setProjectName(project.name);
-      setExportedVideoPath(undefined);
+      const currentId = store.currentProject?.id;
+      if (currentId !== project.id) {
+        store.resetEditor();
+        store.setCurrentProject(project);
+        setProjectName(project.name);
+        setExportedVideoPath(undefined);
+      }
     }
   }, [project?.id]);
 

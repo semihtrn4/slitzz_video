@@ -1,5 +1,6 @@
 // @ts-ignore
 import { Directory, Paths, File } from 'expo-file-system';
+import * as FileSystem from 'expo-file-system';
 import type { SubtitleSegment } from '../types';
 import { getPath, ensureAbsolute, stripFileProtocol } from '../utils/pathUtils';
 
@@ -26,7 +27,7 @@ export class TranscriptionService {
     try {
       const path = this.getModelPath();
       const f = new File(path);
-      return f.exists;
+      return f.exists && f.size > 50_000_000; // ~142MB bekleniyor, 50MB minimum
     } catch {
       return false;
     }
@@ -42,25 +43,50 @@ export class TranscriptionService {
       dir.create({ intermediates: true });
     }
 
-    console.log('[Whisper] Downloading model to:', modelPath);
-    onProgress?.(0.1);
+    // Ham path — FileSystem.createDownloadResumable ham path ister
+    const rawModelPath = stripFileProtocol(modelPath);
+    console.log('[Whisper] Downloading model to:', rawModelPath);
+    onProgress?.(0);
 
-    const targetFile = new File(modelPath);
+    const downloadResumable = FileSystem.createDownloadResumable(
+      MODEL_URL,
+      // FileSystem eski API file:// URI bekler
+      modelPath.startsWith('file://') ? modelPath : `file://${rawModelPath}`,
+      {
+        headers: { 'User-Agent': 'SlitzCut-App/1.0' },
+      },
+      (downloadProgress) => {
+        const { totalBytesWritten, totalBytesExpectedToWrite } = downloadProgress;
+        if (totalBytesExpectedToWrite > 0) {
+          const progress = totalBytesWritten / totalBytesExpectedToWrite;
+          console.log(`[Whisper] Download progress: ${Math.round(progress * 100)}%`);
+          onProgress?.(progress);
+        }
+      }
+    );
+
     try {
-      await File.downloadFileAsync(MODEL_URL, targetFile, {
-        headers: { 'User-Agent': 'SlitzCut-App/1.0' }
-      });
+      const result = await downloadResumable.downloadAsync();
+      if (!result?.uri) {
+        throw new Error('Download returned no URI');
+      }
       onProgress?.(1);
+      console.log('[Whisper] Download complete. Size check...');
     } catch (err) {
       console.error('[Whisper] Download error:', err);
+      // Yarım kalan dosyayı temizle
+      try { const f = new File(modelPath); if (f.exists) f.delete(); } catch { }
       throw new Error(`[Whisper] Download failed: ${err}`);
     }
 
-    if (!targetFile.exists || targetFile.size < 1000000) {
+    const targetFile = new File(modelPath);
+    if (!targetFile.exists || targetFile.size < 50_000_000) {
+      // ggml-base.bin ~142MB — 50MB minimum güvenli threshold
       try { targetFile.delete(); } catch { }
-      throw new Error('[Whisper] Download verification failed: file corrupt or too small');
+      throw new Error('[Whisper] Download verification failed: file corrupt or too small (expected ~142MB)');
     }
 
+    console.log('[Whisper] Model verified. Size:', targetFile.size, 'bytes');
     this._modelPath = modelPath;
     return modelPath;
   }

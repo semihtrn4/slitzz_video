@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { Platform } from 'react-native';
 import { ImpactFeedbackStyle, NotificationFeedbackType } from 'expo-haptics';
 import { useRouter } from 'expo-router';
 
@@ -54,7 +55,8 @@ export function useVideoEditor(project: Project) {
       }
 
       setProcessingStep('extracting-audio');
-      const audioPath = await ffmpegService.extractAudio(project.originalVideoPath, true);
+      // Silence detect için Whisper formatı (WAV 16kHz) gerekmez — m4a daha hızlı ve stabil
+      const audioPath = await ffmpegService.extractAudio(project.originalVideoPath, false);
 
       setProcessingStep('detecting-silences');
       const segments = await ffmpegService.detectSilences(
@@ -128,8 +130,10 @@ export function useVideoEditor(project: Project) {
 
       const hasModel = await transcriptionService.isModelDownloaded();
       if (!hasModel) {
+        setProcessingStep('extracting-audio'); // indirme sırasında geçici step
         await transcriptionService.downloadModel((progress) => {
-          setProcessingProgress(progress * 0.5);
+          // İndirme 0-70% arasında göster, geri kalan 30% transcribe için
+          setProcessingProgress(progress * 0.7);
         });
       }
 
@@ -225,11 +229,14 @@ export function useVideoEditor(project: Project) {
         status: 'exported',
       });
 
-      // FIX #4: 'saving' geçersiz ProcessingStep, 'exporting' kullan
+      // FIX: iOS ham path (file:// prefix'siz), Android file:// prefix'li ister
       setProcessingStep('exporting');
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status === 'granted') {
-        await MediaLibrary.saveToLibraryAsync(outputPath);
+        const saveablePath = Platform.OS === 'ios'
+          ? outputPath.replace('file://', '')
+          : outputPath.startsWith('file://') ? outputPath : `file://${outputPath}`;
+        await MediaLibrary.saveToLibraryAsync(saveablePath);
         console.log('[MediaLibrary] Saved to gallery successfully');
       } else {
         console.warn('[MediaLibrary] Permission denied, skipping gallery save');
