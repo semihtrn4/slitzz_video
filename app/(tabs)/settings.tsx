@@ -91,8 +91,10 @@ export default function SettingsScreen() {
         setDownloadProgress(progress);
       });
       setModelDownloaded(true);
-    } catch {
-      Alert.alert('Hata', 'Model indirilemedi. Lütfen tekrar deneyin.');
+      Alert.alert('✅ Başarılı', 'Whisper modeli başarıyla indirildi.');
+    } catch (err: any) {
+      console.error('[Settings] Model download failed:', err);
+      Alert.alert('İndirme Hatası', `Model indirilemedi:\n\n${err?.message || err}\n\nİnternet bağlantınızı kontrol edip tekrar deneyin.`);
     } finally {
       setDownloadProgress(null);
     }

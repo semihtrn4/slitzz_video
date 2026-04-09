@@ -1,6 +1,7 @@
 // @ts-ignore
 import { Directory, Paths, File } from 'expo-file-system';
-import * as FileSystem from 'expo-file-system';
+// Legacy API — createDownloadResumable progress callback için gerekli
+import * as FileSystem from 'expo-file-system/legacy';
 import type { SubtitleSegment } from '../types';
 import { getPath, ensureAbsolute, stripFileProtocol } from '../utils/pathUtils';
 
@@ -16,79 +17,99 @@ export class TranscriptionService {
   }
 
   private getModelDir(): string {
-    return getPath(Paths.document, 'models/');
+    // Eski API (FileSystem.documentDirectory) — file:// URI döndürür, tutarlı
+    return (FileSystem.documentDirectory ?? '') + 'models/';
   }
 
   private getModelPath(): string {
-    return getPath(this.getModelDir(), 'ggml-base.bin');
+    return this.getModelDir() + 'ggml-base.bin';
   }
 
   async isModelDownloaded(): Promise<boolean> {
     try {
-      const path = this.getModelPath();
-      const f = new File(path);
-      return f.exists && f.size > 50_000_000; // ~142MB bekleniyor, 50MB minimum
+      const path = this.getModelPath(); // file:// URI
+      const info = await FileSystem.getInfoAsync(path, { size: true });
+      return info.exists && (info as any).size > 50_000_000;
     } catch {
       return false;
     }
   }
 
   async downloadModel(onProgress?: (progress: number) => void): Promise<string> {
-    const modelDir = this.getModelDir();
-    const modelPath = this.getModelPath();
-    const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
+    const modelDir = this.getModelDir();   // file:// URI
+    const modelPath = this.getModelPath(); // file:// URI
 
-    const dir = new Directory(modelDir);
-    if (!dir.exists) {
-      dir.create({ intermediates: true });
-    }
+    // HuggingFace doğrudan CDN URL — redirect yok, daha güvenilir
+    const MODEL_URLS = [
+      'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true',
+      'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+    ];
 
-    // Ham path — FileSystem.createDownloadResumable ham path ister
-    const rawModelPath = stripFileProtocol(modelPath);
-    console.log('[Whisper] Downloading model to:', rawModelPath);
+    // Klasörü oluştur
+    await FileSystem.makeDirectoryAsync(modelDir, { intermediates: true }).catch(() => {});
+
+    // Önceki yarım indirmeyi temizle
+    await FileSystem.deleteAsync(modelPath, { idempotent: true }).catch(() => {});
+
+    console.log('[Whisper] Downloading model to:', modelPath);
     onProgress?.(0);
 
-    const downloadResumable = FileSystem.createDownloadResumable(
-      MODEL_URL,
-      // FileSystem eski API file:// URI bekler
-      modelPath.startsWith('file://') ? modelPath : `file://${rawModelPath}`,
-      {
-        headers: { 'User-Agent': 'SlitzCut-App/1.0' },
-      },
-      (downloadProgress) => {
-        const { totalBytesWritten, totalBytesExpectedToWrite } = downloadProgress;
-        if (totalBytesExpectedToWrite > 0) {
-          const progress = totalBytesWritten / totalBytesExpectedToWrite;
-          console.log(`[Whisper] Download progress: ${Math.round(progress * 100)}%`);
-          onProgress?.(progress);
+    let lastError: any = null;
+
+    for (const MODEL_URL of MODEL_URLS) {
+      console.log('[Whisper] Trying URL:', MODEL_URL);
+      try {
+        const downloadResumable = FileSystem.createDownloadResumable(
+          MODEL_URL,
+          modelPath,
+          {
+            headers: {
+              'User-Agent': 'Mozilla/5.0',
+              'Accept': 'application/octet-stream',
+            },
+          },
+          (downloadProgress) => {
+            const { totalBytesWritten, totalBytesExpectedToWrite } = downloadProgress;
+            if (totalBytesExpectedToWrite > 0) {
+              const progress = totalBytesWritten / totalBytesExpectedToWrite;
+              console.log(`[Whisper] Download progress: ${Math.round(progress * 100)}%`);
+              onProgress?.(progress);
+            } else if (totalBytesWritten > 0) {
+              // totalBytesExpectedToWrite bilinmiyorsa tahmini göster (142MB baz alarak)
+              const estimated = Math.min(0.99, totalBytesWritten / 148_000_000);
+              onProgress?.(estimated);
+            }
+          }
+        );
+
+        const result = await downloadResumable.downloadAsync();
+        if (!result?.uri) {
+          throw new Error('Download returned no URI');
         }
-      }
-    );
 
-    try {
-      const result = await downloadResumable.downloadAsync();
-      if (!result?.uri) {
-        throw new Error('Download returned no URI');
+        // Boyut doğrulama
+        const info = await FileSystem.getInfoAsync(modelPath, { size: true });
+        console.log('[Whisper] Downloaded size:', (info as any).size);
+
+        if (!info.exists || (info as any).size < 50_000_000) {
+          await FileSystem.deleteAsync(modelPath, { idempotent: true }).catch(() => {});
+          throw new Error(`File too small: ${(info as any).size ?? 0} bytes (expected ~142MB)`);
+        }
+
+        onProgress?.(1);
+        console.log('[Whisper] Model verified. Size:', (info as any).size, 'bytes');
+        this._modelPath = modelPath;
+        return modelPath;
+
+      } catch (err) {
+        console.error('[Whisper] URL failed:', MODEL_URL, err);
+        lastError = err;
+        await FileSystem.deleteAsync(modelPath, { idempotent: true }).catch(() => {});
+        // Sonraki URL'yi dene
       }
-      onProgress?.(1);
-      console.log('[Whisper] Download complete. Size check...');
-    } catch (err) {
-      console.error('[Whisper] Download error:', err);
-      // Yarım kalan dosyayı temizle
-      try { const f = new File(modelPath); if (f.exists) f.delete(); } catch { }
-      throw new Error(`[Whisper] Download failed: ${err}`);
     }
 
-    const targetFile = new File(modelPath);
-    if (!targetFile.exists || targetFile.size < 50_000_000) {
-      // ggml-base.bin ~142MB — 50MB minimum güvenli threshold
-      try { targetFile.delete(); } catch { }
-      throw new Error('[Whisper] Download verification failed: file corrupt or too small (expected ~142MB)');
-    }
-
-    console.log('[Whisper] Model verified. Size:', targetFile.size, 'bytes');
-    this._modelPath = modelPath;
-    return modelPath;
+    throw new Error(`Model indirme başarısız: ${lastError?.message || lastError}`);
   }
 
   async transcribe(
@@ -133,11 +154,11 @@ export class TranscriptionService {
 
     // Dosya varlığını kontrol et
     try {
-      const audioFile = new File(fileUri);
-      if (!audioFile.exists) {
+      const audioInfo = await FileSystem.getInfoAsync(fileUri, { size: true });
+      if (!audioInfo.exists) {
         throw new Error(`Audio file not found at URI: ${fileUri}`);
       }
-      console.log('[Whisper] Audio file size:', audioFile.size, 'bytes');
+      console.log('[Whisper] Audio file size:', (audioInfo as any).size, 'bytes');
     } catch (fileErr) {
       throw new Error(`[Whisper] Audio file check failed: ${fileErr}`);
     }

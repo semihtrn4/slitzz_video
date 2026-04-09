@@ -8,12 +8,35 @@ import type { SilenceSegment, TimeSegment, ExportConfig } from '../types';
 export class FFmpegService {
   private static instance: FFmpegService;
   private logEnabled: boolean = false;
+  private _nativeAvailable: boolean | null = null;
 
   static getInstance(): FFmpegService {
     if (!FFmpegService.instance) {
       FFmpegService.instance = new FFmpegService();
     }
     return FFmpegService.instance;
+  }
+
+  // Native modülün hazır olup olmadığını kontrol et
+  private async isNativeAvailable(): Promise<boolean> {
+    if (this._nativeAvailable !== null) return this._nativeAvailable;
+    try {
+      // FFmpegKit null ise bu hata fırlatır
+      const session = await FFmpegKit.execute('-version');
+      this._nativeAvailable = session != null;
+    } catch {
+      this._nativeAvailable = false;
+    }
+    return this._nativeAvailable;
+  }
+
+  private throwIfNativeUnavailable() {
+    if (this._nativeAvailable === false) {
+      throw new Error(
+        'FFmpeg native modülü bulunamadı. Bu özellik Expo Go\'da çalışmaz.\n' +
+        'Native build için: npx expo run:ios veya npx expo run:android'
+      );
+    }
   }
 
   private async ensureLogCallback() {
@@ -415,11 +438,13 @@ export class FFmpegService {
       const output = logs.map((l: Log) => l.getMessage()).join('\n');
 
       if (ReturnCode.isSuccess(returnCode)) {
+        this._nativeAvailable = true;
         return {
           success: true,
           version: output.split('\n')[0]
         };
       } else {
+        this._nativeAvailable = false;
         const failStack = await session.getFailStackTrace();
         return {
           success: false,
@@ -428,10 +453,14 @@ export class FFmpegService {
         };
       }
     } catch (err: any) {
+      this._nativeAvailable = false;
+      const isExpoGo = err?.message?.includes('getLogLevel') || err?.message?.includes('null');
       return {
         success: false,
         version: "Hata",
-        error: err.message
+        error: isExpoGo
+          ? "Expo Go desteklenmiyor. 'npx expo run:ios' veya 'npx expo run:android' ile native build yapın."
+          : err.message
       };
     }
   }

@@ -122,17 +122,25 @@ export function useVideoEditor(project: Project) {
     try {
       const videoPath = project.processedVideoPath || project.originalVideoPath;
       setProcessingStep('probing-video');
-      const info = await ffmpegService.getVideoInfo(videoPath);
-      if (!info.hasAudio) {
+
+      // FFmpegKit native modülü yoksa hasAudio=true varsay, devam et
+      let hasAudio = true;
+      try {
+        const info = await ffmpegService.getVideoInfo(videoPath);
+        hasAudio = info.hasAudio;
+      } catch (e) {
+        console.warn('[Transcribe] getVideoInfo failed, assuming hasAudio=true:', e);
+      }
+
+      if (!hasAudio) {
         toast.show('This video has no audio to transcribe.', 'info');
         return;
       }
 
       const hasModel = await transcriptionService.isModelDownloaded();
       if (!hasModel) {
-        setProcessingStep('extracting-audio'); // indirme sırasında geçici step
+        setProcessingStep('extracting-audio');
         await transcriptionService.downloadModel((progress) => {
-          // İndirme 0-70% arasında göster, geri kalan 30% transcribe için
           setProcessingProgress(progress * 0.7);
         });
       }
@@ -161,7 +169,18 @@ export function useVideoEditor(project: Project) {
       toast.show('Transcription complete!', 'success');
     } catch (error) {
       console.error('Error transcribing:', error);
-      toast.show('Failed to transcribe audio', 'error');
+      const msg = (error as any)?.message || String(error);
+      if (msg.includes('whisper.rn')) {
+        toast.show('Whisper native modülü bulunamadı. Fiziksel cihaz ve native build gerekli.', 'error');
+      } else if (msg.includes('model not downloaded') || msg.includes('Model not downloaded')) {
+        toast.show('Whisper modeli indirilmedi. Ayarlar > AI bölümünden indirin.', 'error');
+      } else if (msg.includes('no audio') || msg.includes('hasAudio')) {
+        toast.show('Bu videoda ses yok.', 'error');
+      } else if (msg.includes('getLogLevel') || msg.includes('FFmpeg')) {
+        toast.show('FFmpeg native modülü hazır değil. Native build gerekli (expo run:ios/android).', 'error');
+      } else {
+        toast.show(`Transcribe hatası: ${msg}`, 'error');
+      }
     } finally {
       setProcessing(false);
       setProcessingStep('idle');

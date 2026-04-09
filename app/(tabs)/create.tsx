@@ -10,7 +10,7 @@ import {
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as LegacyFS from 'expo-file-system/legacy';
 import { File, Directory, Paths } from 'expo-file-system';
 import { getPath, ensureAbsolute } from '@/src/utils/pathUtils';
 import {
@@ -93,14 +93,20 @@ export default function CreateScreen() {
         } catch {
           fileSize = 0;
         }
-        
-        // Get video duration using FFmpeg
-        const videoInfo = await ffmpegService.getVideoInfo(asset.uri);
-        
+
+        // FFmpeg native modülü yoksa duration 0 olarak devam et
+        let duration = 0;
+        try {
+          const videoInfo = await ffmpegService.getVideoInfo(asset.uri);
+          duration = videoInfo.duration;
+        } catch (e) {
+          console.warn('[Create] getVideoInfo failed, using duration=0:', e);
+        }
+
         setSelectedVideo({
           uri: asset.uri,
           name: asset.name,
-          duration: videoInfo.duration,
+          duration,
           size: fileSize,
         });
       }
@@ -127,7 +133,6 @@ export default function CreateScreen() {
   const handleContinue = async () => {
     if (!selectedVideo) return;
 
-    // Check free plan project limit before creating
     if (!canCreateProject(projects.length)) {
       router.push('/paywall');
       return;
@@ -135,7 +140,7 @@ export default function CreateScreen() {
 
     setIsLoading(true);
     try {
-      // Copy video to app directory
+      // Projeyi documents klasörüne kopyala — yeni File API
       const projectsDir = getPath(Paths.document, 'projects/');
       const dir = new Directory(projectsDir);
       if (!dir.exists) {
@@ -144,25 +149,38 @@ export default function CreateScreen() {
 
       const fileName = `project_${Date.now()}.mp4`;
       const destUri = getPath(projectsDir, fileName);
-      
+
       console.log('[Create] Copying from:', selectedVideo.uri, 'to:', destUri);
-      const sourceFile = new File(selectedVideo.uri);
+      const sourceFile = new File(ensureAbsolute(selectedVideo.uri));
       const destFile = new File(destUri);
       sourceFile.copy(destFile);
 
-      // Generate thumbnail
-      const thumbnailPath = await ffmpegService.generateThumbnail(destUri, 0);
+      // Thumbnail — FFmpeg yoksa null geç, editor açılır
+      let thumbnailPath: string | undefined;
+      try {
+        thumbnailPath = await ffmpegService.generateThumbnail(destUri, 0);
+      } catch (e) {
+        console.warn('[Create] Thumbnail generation failed (FFmpeg not ready):', e);
+        thumbnailPath = undefined;
+      }
 
-      // Create project
+      // Duration — FFmpeg ile dene, yoksa ImagePicker'dan gelen değeri kullan
+      let duration = selectedVideo.duration;
+      try {
+        const info = await ffmpegService.getVideoInfo(destUri);
+        if (info.duration > 0) duration = info.duration;
+      } catch (e) {
+        console.warn('[Create] getVideoInfo failed, using picker duration:', duration);
+      }
+
       const projectId = addProject({
         name: selectedVideo.name.replace(/\.[^/.]+$/, ''),
         originalVideoPath: destUri,
         thumbnailPath,
-        duration: selectedVideo.duration,
+        duration,
         status: 'draft',
       });
 
-      // Navigate to editor
       router.push(`/editor/${projectId}`);
     } catch (error: any) {
       console.error('Error creating project:', error);
