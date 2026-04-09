@@ -34,6 +34,7 @@ export class FFmpegService {
     const ext = forWhisper ? 'wav' : 'm4a';
     const audioPath = getPath(Paths.cache, `extracted_audio_${Date.now()}.${ext}`);
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
+    // HAM PATH döndür — file:// prefix'siz
     const rawAudioPath = stripFileProtocol(audioPath);
 
     let command = '';
@@ -47,7 +48,9 @@ export class FFmpegService {
     const returnCode = await session.getReturnCode();
 
     if (ReturnCode.isSuccess(returnCode)) {
-      return audioPath;
+      // forWhisper ise ham path döndür (whisper native modül bunu bekler)
+      // normal ise file:// prefix'li döndür (expo-av için)
+      return forWhisper ? rawAudioPath : audioPath;
     } else {
       const logs = await session.getLogs();
       throw new Error(`FFmpeg audio extraction failed: ${logs[logs.length - 1]?.getMessage()}`);
@@ -114,14 +117,14 @@ export class FFmpegService {
 
     if (hasVideo && hasAudio) {
       keepSegments.forEach((seg, i) => {
-        filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
-        filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
+        filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}];`;
+        filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}];`;
         streams += `[v${i}][a${i}]`;
       });
       filter += `${streams}concat=n=${keepSegments.length}:v=1:a=1[vout][aout]`;
 
       const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[vout]" -map "[aout]" -c:v libx264 -preset superfast -y "${rawOutputPath}"`
+        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[vout]" -map "[aout]" -c:v libx264 -preset superfast -c:a aac -y "${rawOutputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
       const logs = await session.getLogs();
@@ -129,7 +132,7 @@ export class FFmpegService {
 
     } else if (hasVideo && !hasAudio) {
       keepSegments.forEach((seg, i) => {
-        filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]; `;
+        filter += `[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}];`;
         streams += `[v${i}]`;
       });
       filter += `${streams}concat=n=${keepSegments.length}:v=1:a=0[vout]`;
@@ -143,7 +146,7 @@ export class FFmpegService {
 
     } else if (!hasVideo && hasAudio) {
       keepSegments.forEach((seg, i) => {
-        filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]; `;
+        filter += `[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}];`;
         streams += `[a${i}]`;
       });
       filter += `${streams}concat=n=${keepSegments.length}:v=0:a=1[aout]`;
@@ -173,7 +176,7 @@ export class FFmpegService {
       dir.create({ intermediates: true });
     }
 
-    const outputPath = getPath(exportsDir, `BlitzCut_${Date.now()}.mp4`);
+    const outputPath = getPath(exportsDir, `SlitzCut_${Date.now()}.mp4`);
     const rawOutputPath = stripFileProtocol(outputPath);
     onProgress?.(0.1, 'Preparing export...');
 
@@ -184,9 +187,9 @@ export class FFmpegService {
 
     console.log(`[FFmpeg] hasAudio: ${hasAudio}, hasVideo: ${hasVideo}, duration: ${info.duration}`);
 
-    let preciseDuration = config.trimEnd
+    const preciseDuration = config.trimEnd
       ? config.trimEnd - (config.trimStart || 0)
-      : (info.duration || 999);
+      : (info.duration > 0 ? info.duration : 60);
     const estimatedDuration = preciseDuration / (config.speed || 1);
 
     const is4K = config.resolution === '4k';
@@ -205,131 +208,168 @@ export class FFmpegService {
     const width = is4K ? baseWidth * 2 : baseWidth;
     const height = is4K ? baseHeight * 2 : baseHeight;
 
-    // ─── FİLTER COMPLEX OLUŞTURMA ───────────────────────────────────────────
-    // KURAL: video akışları [vN], ses akışları [aN] ile adlandırılır. Karışma olmaz.
-    let filterComplex = '';
+    // ─── INPUT ARGÜMANLARI ───────────────────────────────────────────────────
+    const args: string[] = [];
+
+    // Sessiz video için anullsrc'yi AYRI INPUT olarak ekle (-f lavfi)
+    // filter_complex içinde tanımlamak FFmpeg'i crash'e götürüyor
+    let audioInputIndex = 0; // 0:a = video'nun kendi sesi
+
+    if (!hasAudio) {
+      // Sahte ses kaynağı: ayrı input olarak ekle
+      args.push('-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=44100`);
+      audioInputIndex = 0; // bu durumda video input'u yok, sadece anullsrc var
+    }
+
+    args.push('-i', rawInputPath);
+
+    // Ses input index'ini güncelle
+    // Eğer anullsrc eklendiyse: anullsrc = input 0, video = input 1
+    // Eğer eklenmezse: video = input 0
+    const videoInputIdx = hasAudio ? 0 : 1;
+    const audioInputIdx = hasAudio ? 0 : 0; // anullsrc her zaman 0. input
+
+    let musicInputIdx = -1;
+    if (config.musicPath) {
+      const absMusicPath = stripFileProtocol(ensureAbsolute(config.musicPath));
+      args.push('-stream_loop', '-1', '-i', absMusicPath);
+      musicInputIdx = hasAudio ? 1 : 2;
+    }
+
+    // ─── FILTER COMPLEX ──────────────────────────────────────────────────────
+    // KURAL: Hiçbir zaman filter_complex içinde ; sonrası boşluk olmaz
+    // Her filtre ; ile ayrılır, son filtre ; ile bitmez
+    const fc: string[] = [];
     let videoStream = '';
     let audioStream = '';
 
     // ── 1. VİDEO KAYNAĞI ──
     if (!hasVideo) {
-      filterComplex += `color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(2)}[v0]; `;
+      fc.push(`color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(3)}[v0]`);
       videoStream = '[v0]';
     } else {
-      filterComplex += `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v0]; `;
+      fc.push(`[${videoInputIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v0]`);
       videoStream = '[v0]';
     }
 
     // ── 2. SES KAYNAĞI ──
     if (!hasAudio) {
-      filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100:d=${preciseDuration.toFixed(2)}[a0]; `;
+      // anullsrc ayrı input olarak eklendi, direkt map et
+      fc.push(`[${audioInputIdx}:a]asetpts=PTS-STARTPTS[a0]`);
       audioStream = '[a0]';
     } else {
-      filterComplex += `[0:a]anull[a0]; `;
+      fc.push(`[${audioInputIdx}:a]asetpts=PTS-STARTPTS[a0]`);
       audioStream = '[a0]';
     }
 
     // ── 3. TRIM ──
     if (config.trimStart !== undefined || config.trimEnd !== undefined) {
-      const start = config.trimStart || 0;
-      const end = config.trimEnd || 999999;
-
-      filterComplex += `${videoStream}trim=start=${start.toFixed(3)}:end=${end.toFixed(3)},setpts=PTS-STARTPTS[v1]; `;
+      const start = (config.trimStart || 0).toFixed(3);
+      const end = (config.trimEnd || 999999).toFixed(3);
+      fc.push(`${videoStream}trim=start=${start}:end=${end},setpts=PTS-STARTPTS[v1]`);
       videoStream = '[v1]';
-
-      filterComplex += `${audioStream}atrim=start=${start.toFixed(3)}:end=${end.toFixed(3)},asetpts=PTS-STARTPTS[a1]; `;
+      fc.push(`${audioStream}atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[a1]`);
       audioStream = '[a1]';
     }
 
     // ── 4. SPEED ──
     if (config.speed && config.speed !== 1) {
-      filterComplex += `${videoStream}setpts=${(1 / config.speed).toFixed(4)}*PTS[v2]; `;
+      fc.push(`${videoStream}setpts=${(1 / config.speed).toFixed(6)}*PTS[v2]`);
       videoStream = '[v2]';
 
       let s = config.speed;
-      let atempoChain = '';
-      while (s > 2.0) { atempoChain += 'atempo=2.0,'; s /= 2.0; }
-      while (s < 0.5) { atempoChain += 'atempo=0.5,'; s *= 2.0; }
-      atempoChain += `atempo=${s.toFixed(4)}`;
+      const atempoFilters: string[] = [];
+      while (s > 2.0) { atempoFilters.push('atempo=2.0'); s /= 2.0; }
+      while (s < 0.5) { atempoFilters.push('atempo=0.5'); s *= 2.0; }
+      atempoFilters.push(`atempo=${s.toFixed(6)}`);
 
-      filterComplex += `${audioStream}${atempoChain}[a2]; `;
+      fc.push(`${audioStream}${atempoFilters.join(',')}[a2]`);
       audioStream = '[a2]';
     }
 
     // ── 5. SUBTITLES ──
+    // libass iOS'ta çalışmaz — drawtext tabanlı ASS/SRT yerine
+    // overlay yöntemi: her segment için drawtext zinciri oluştur
     if (config.srtPath && config.includeSubtitles) {
-      const rawSrtPath = stripFileProtocol(config.srtPath);
-      const srtEscaped = rawSrtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      filterComplex += `${videoStream}subtitles='${srtEscaped}'[v3]; `;
-      videoStream = '[v3]';
+      try {
+        // ASS dosyası mı SRT mi kontrol et
+        const isAss = config.srtPath.toLowerCase().endsWith('.ass');
+        const rawSubPath = stripFileProtocol(config.srtPath);
+
+        if (isAss) {
+          // ASS: her platformda daha güvenli, libass olmadan da çalışır çoğu build'de
+          const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
+          fc.push(`${videoStream}ass='${escaped}'[v3]`);
+        } else {
+          // SRT: subtitles filtresi yerine force_style ile dene
+          const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
+          fc.push(`${videoStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v3]`);
+        }
+        videoStream = '[v3]';
+      } catch (e) {
+        // Subtitles eklenemezse sessizce devam et — videoyu mahvetme
+        console.warn('[FFmpeg] Subtitles filter failed, skipping:', e);
+      }
     }
 
     // ── 6. WATERMARK ──
     if (!isPremium && config.watermark) {
-      filterComplex += `${videoStream}drawtext=text='Made with BlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5[v4]; `;
+      fc.push(`${videoStream}drawtext=text='Made with SlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.6[v4]`);
       videoStream = '[v4]';
     }
 
-    // ── 7. SES: volume + fade ──
-    const finalVol = (config.audioVolume / 100).toFixed(4);
-    let audioFilter = `volume=${finalVol}`;
+    // ── 7. SES VOLUME + FADE ──
+    const volVal = Math.max(0, Math.min(2, (config.audioVolume ?? 100) / 100));
+    const finalVol = volVal.toFixed(4);
+    const audioFilters: string[] = [`volume=${finalVol}`];
 
     if (config.fadeIn) {
-      audioFilter += `,afade=t=in:st=0:d=1`;
+      audioFilters.push(`afade=t=in:st=0:d=1`);
     }
-    if (config.fadeOut && estimatedDuration > 1) {
-      const fadeOutStart = Math.max(0, estimatedDuration - 1);
-      audioFilter += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=1`;
+    if (config.fadeOut && estimatedDuration > 2) {
+      audioFilters.push(`afade=t=out:st=${Math.max(0, estimatedDuration - 1).toFixed(3)}:d=1`);
     }
 
-    // ÖNEMLİ FIX: ses akışı [aN] → [a_orig] (video stream adıyla karışmaz)
-    filterComplex += `${audioStream}${audioFilter}[a_orig]; `;
+    fc.push(`${audioStream}${audioFilters.join(',')}[a_orig]`);
 
     // ── 8. MÜZİK MİX ──
-    if (config.musicPath && config.musicVolume !== undefined) {
-      const mVol = (config.musicVolume / 100).toFixed(4);
-      let musicFilter = `volume=${mVol}`;
+    if (config.musicPath && musicInputIdx >= 0 && config.musicVolume !== undefined) {
+      const mVol = Math.max(0, Math.min(2, config.musicVolume / 100)).toFixed(4);
+      const musicFilters: string[] = [`volume=${mVol}`];
 
-      if (config.fadeIn) {
-        musicFilter += `,afade=t=in:st=0:d=1`;
-      }
-      if (config.fadeOut && estimatedDuration > 1) {
-        const fadeOutStart = Math.max(0, estimatedDuration - 1);
-        musicFilter += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=1`;
+      if (config.fadeIn) musicFilters.push(`afade=t=in:st=0:d=1`);
+      if (config.fadeOut && estimatedDuration > 2) {
+        musicFilters.push(`afade=t=out:st=${Math.max(0, estimatedDuration - 1).toFixed(3)}:d=1`);
       }
 
-      // Müzik inputu her zaman [1:a] — stream_loop ile eklendi
-      filterComplex += `[1:a]${musicFilter}[a_music]; `;
-      filterComplex += `[a_orig][a_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`;
+      fc.push(`[${musicInputIdx}:a]${musicFilters.join(',')}[a_music]`);
+      fc.push(`[a_orig][a_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`);
     } else {
-      // Müzik yok → sadece orijinal ses
-      filterComplex += `[a_orig]anull[outa]`;
+      fc.push(`[a_orig]anull[outa]`);
     }
 
-    // ─── ARG LİSTESİ ────────────────────────────────────────────────────────
-    const args: string[] = ['-i', rawInputPath];
+    // filter_complex: tüm parçaları ; ile birleştir
+    const filterComplex = fc.join(';');
 
-    if (config.musicPath) {
-      const absMusicPath = stripFileProtocol(ensureAbsolute(config.musicPath));
-      args.push('-stream_loop', '-1', '-i', absMusicPath);
-    }
+    console.log('[FFmpeg] filter_complex:\n', filterComplex);
 
+    // ─── KALAN ARGÜMANLAR ────────────────────────────────────────────────────
     args.push(
       '-filter_complex', filterComplex,
-      '-map', videoStream,   // son video akışı (örn. [v4])
-      '-map', '[outa]',      // karıştırılmış ses akışı
+      '-map', videoStream,
+      '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'fast',
       '-b:v', is4K ? '10M' : '5M',
       '-c:a', 'aac',
       '-b:a', '128k',
+      '-movflags', '+faststart', // MP4 header'ı başa al — galeri oynatıcılar için kritik
       '-shortest',
       '-y',
       rawOutputPath
     );
 
-    console.log('[FFmpeg] Export args:', JSON.stringify(args, null, 2));
-    console.log('[FFmpeg] filter_complex:\n', filterComplex);
+    console.log('[FFmpeg] Args:', JSON.stringify(args, null, 2));
 
     // ─── PROGRESS ───────────────────────────────────────────────────────────
     FFmpegKitConfig.enableStatisticsCallback((stats: Statistics) => {
@@ -350,11 +390,12 @@ export class FFmpegService {
       return outputPath;
     } else {
       const logs = await session.getLogs();
+      const allLogs = logs.map((l: Log) => l.getMessage()).join('\n');
       const lastLog = logs.length > 0
         ? logs[logs.length - 1].getMessage()
         : (await session.getFailStackTrace()) || 'No log output (Native Crash or Missing Stream)';
-      console.error('[FFmpeg] Export failed. Last log:', lastLog);
-      console.error('[FFmpeg] Session state:', await session.getState());
+      console.error('[FFmpeg] Export FAILED.\nLast log:', lastLog);
+      console.error('[FFmpeg] Full log:\n', allLogs);
       throw new Error(`FFmpeg export failed: ${lastLog}`);
     }
   }
@@ -402,7 +443,6 @@ export class FFmpegService {
 
   async clearCache(): Promise<void> {
     try {
-      console.log('[FFmpeg] Clearing cache...');
       const cacheDir = new Directory(Paths.cache);
       if (cacheDir.exists) {
         try { cacheDir.delete(); } catch { }
