@@ -73,9 +73,10 @@ export function useVideoEditor(project: Project) {
         haptics.impact(ImpactFeedbackStyle.Medium);
         toast.show(`${segments.length} silence(s) detected.`, 'success');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error detecting silences:', error);
-      toast.show('Failed to detect silences', 'error');
+      const msg = error?.message || String(error);
+      toast.show(`Failed to detect silences: ${msg.substring(0, 150)}...`, 'error');
     } finally {
       setProcessing(false);
       setProcessingStep('idle');
@@ -105,9 +106,10 @@ export function useVideoEditor(project: Project) {
       });
 
       toast.show('Silences removed successfully!', 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error removing silences:', error);
-      toast.show('Failed to remove silences', 'error');
+      const msg = error?.message || String(error);
+      toast.show(`Failed to remove silences: ${msg.substring(0, 150)}...`, 'error');
     } finally {
       setProcessing(false);
       setProcessingStep('idle');
@@ -179,7 +181,8 @@ export function useVideoEditor(project: Project) {
       } else if (msg.includes('getLogLevel') || msg.includes('FFmpeg')) {
         toast.show('FFmpeg native modülü hazır değil. Native build gerekli (expo run:ios/android).', 'error');
       } else {
-        toast.show(`Transcribe hatası: ${msg}`, 'error');
+        const fullMsg = (error as any)?.message || String(error);
+        toast.show(`Transcribe hatası: ${fullMsg.substring(0, 150)}...`, 'error');
       }
     } finally {
       setProcessing(false);
@@ -270,7 +273,8 @@ export function useVideoEditor(project: Project) {
       if (error?.message === 'FREE_PLAN_DURATION_EXCEEDED') {
         router.push('/paywall');
       } else {
-        toast.show(`Export failed: ${error?.message || 'Unknown error'}`, 'error');
+        const fullMsg = (error as any)?.message || String(error);
+        toast.show(`Export failed: ${fullMsg.substring(0, 300)}...`, 'error');
       }
       return null;
     } finally {

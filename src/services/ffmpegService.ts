@@ -30,6 +30,18 @@ export class FFmpegService {
     return this._nativeAvailable;
   }
 
+  private async getSessionOutput(session: any): Promise<string> {
+    const logs = await session.getLogs();
+    const failStack = await session.getFailStackTrace();
+    const allLogs = logs.map((l: any) => l.getMessage()).join('\n');
+    
+    if (!allLogs && !failStack) {
+      return 'No log output available (Native Crash or Missing Stream)';
+    }
+
+    return `LOGS:\n${allLogs}\n\nSTACK TRACE:\n${failStack || 'None'}`;
+  }
+
   private throwIfNativeUnavailable() {
     if (this._nativeAvailable === false) {
       throw new Error(
@@ -76,8 +88,9 @@ export class FFmpegService {
       // normal ise file:// prefix'li döndür (expo-av için)
       return forWhisper ? rawAudioPath : audioPath;
     } else {
-      const logs = await session.getLogs();
-      throw new Error(`FFmpeg audio extraction failed: ${logs[logs.length - 1]?.getMessage()}`);
+      const output = await this.getSessionOutput(session);
+      console.error('[FFmpeg] Audio extraction failed:', output);
+      throw new Error(`FFmpeg audio extraction failed.\nTarget: ${rawAudioPath}\nSource: ${absVideoPath}\nErrors: ${output}`);
     }
   }
 
@@ -95,7 +108,9 @@ export class FFmpegService {
     if (ReturnCode.isSuccess(returnCode)) {
       return thumbnailPath;
     } else {
-      throw new Error('FFmpeg thumbnail generation failed');
+      const output = await this.getSessionOutput(session);
+      console.error('[FFmpeg] Thumbnail generation failed:', output);
+      throw new Error(`FFmpeg thumbnail generation failed: ${output}`);
     }
   }
 
@@ -117,7 +132,9 @@ export class FFmpegService {
     if (ReturnCode.isSuccess(returnCode) || allOutput.includes('silencedetect')) {
       return silenceService.parseSilenceOutput(allOutput);
     } else {
-      throw new Error('FFmpeg silence detection failed');
+      const output = await this.getSessionOutput(session);
+      console.error('[FFmpeg] Silence detection failed:', output);
+      throw new Error(`FFmpeg silence detection failed: ${output}`);
     }
   }
 
@@ -178,8 +195,9 @@ export class FFmpegService {
         `-i "${absVideoPath}" -filter_complex "${filter}" -map "[aout]" -c:a aac -y "${rawOutputPath}"`
       );
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
-      const logs = await session.getLogs();
-      throw new Error(`FFmpeg silence removal failed (Audio Only): ${logs[logs.length - 1]?.getMessage()}`);
+      const output = await this.getSessionOutput(session);
+      console.error('[FFmpeg] Silence removal failed (Audio Only):', output);
+      throw new Error(`FFmpeg silence removal failed (Audio Only): ${output}`);
 
     } else {
       throw new Error('File has neither audio nor video streams');
@@ -419,14 +437,9 @@ export class FFmpegService {
       onProgress?.(1, 'Complete');
       return outputPath;
     } else {
-      const logs = await session.getLogs();
-      const allLogs = logs.map((l: Log) => l.getMessage()).join('\n');
-      const lastLog = logs.length > 0
-        ? logs[logs.length - 1].getMessage()
-        : (await session.getFailStackTrace()) || 'No log output (Native Crash or Missing Stream)';
-      console.error('[FFmpeg] Export FAILED.\nLast log:', lastLog);
-      console.error('[FFmpeg] Full log:\n', allLogs);
-      throw new Error(`FFmpeg export failed: ${lastLog}`);
+      const output = await this.getSessionOutput(session);
+      console.error('[FFmpeg] Export FAILED.\nDetails:', output);
+      throw new Error(`FFmpeg export failed:\n${output}`);
     }
   }
 
@@ -502,8 +515,8 @@ export class FFmpegService {
 
       return { duration, width: w, height: h, fps, hasAudio, hasVideo };
     } catch (err) {
-      console.error('[FFmpeg] getVideoInfo failed:', err);
-      throw new Error(`Cannot read video info: ${err}`);
+      console.error('[FFmpeg] getVideoInfo failed for path:', videoPath, err);
+      throw new Error(`Cannot read video info (PROBE FAILED).\nPath: ${videoPath}\nError: ${err}`);
     }
   }
 
