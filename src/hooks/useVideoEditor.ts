@@ -7,7 +7,7 @@ import * as MediaLibrary from 'expo-media-library';
 import { useEditorStore } from '../stores/editorStore';
 import { useProjectStore } from '../stores/projectStore';
 import { useSubscriptionStore } from '../stores/subscriptionStore';
-import { ffmpegService } from '../services/ffmpegService';
+import { ffmpegService, FFmpegService } from '../services/ffmpegService';
 import { transcriptionService } from '../services/transcriptionService';
 import { silenceService } from '../services/silenceService';
 import { useHaptics } from './useHaptics';
@@ -57,7 +57,6 @@ export function useVideoEditor(project: Project) {
       }
 
       setProcessingStep('extracting-audio');
-      // Silence detect için Whisper formatı (WAV 16kHz) gerekmez — m4a daha hızlı ve stabil
       const audioPath = await ffmpegService.extractAudio(project.originalVideoPath, false);
 
       setProcessingStep('detecting-silences');
@@ -83,7 +82,6 @@ export function useVideoEditor(project: Project) {
       setProcessing(false);
       setProcessingStep('idle');
     }
-  // FIX #18: haptics ve toast dependency'lere eklendi
   }, [project, silenceSettings, hasPremium, canRemoveSilence, router, setSilenceSegments, setProcessing, setProcessingProgress, setProcessingStep, haptics, toast]);
 
   const applySilenceRemoval = useCallback(async () => {
@@ -127,17 +125,28 @@ export function useVideoEditor(project: Project) {
       const videoPath = project.processedVideoPath || project.originalVideoPath;
       setProcessingStep('probing-video');
 
-      // FFmpegKit native modülü yoksa hasAudio=true varsay, devam et
+      // FIX: hasAudio=false durumunda raw probe çıktısını da hata mesajına ekle
       let hasAudio = true;
+      let probeRawOutput = '';
       try {
         const info = await ffmpegService.getVideoInfo(videoPath);
         hasAudio = info.hasAudio;
+        probeRawOutput = info.rawOutput || '';
+        console.log('[Transcribe] Probe result — hasAudio:', hasAudio, 'rawOutput (200 chars):', probeRawOutput.substring(0, 200));
       } catch (e) {
         console.warn('[Transcribe] getVideoInfo failed, assuming hasAudio=true:', e);
       }
 
       if (!hasAudio) {
-        toast.show('Bu videoda transkribe edilecek ses bulunamadı. (No audio in probe)', 'error');
+        // FIX: Global buffer'dan son logları da ekle — "No log" sorununu aşmak için
+        const globalLogs = FFmpegService.lastGlobalLogs.slice(-10).join('\n');
+        const detail = probeRawOutput
+          ? `Probe çıktısı:\n${probeRawOutput.substring(0, 300)}`
+          : `Global logs:\n${globalLogs || 'Boş'}`;
+        toast.show(
+          `Bu videoda transkribe edilecek ses bulunamadı.\n${detail}`,
+          'error'
+        );
         return;
       }
 
@@ -190,7 +199,6 @@ export function useVideoEditor(project: Project) {
       setProcessing(false);
       setProcessingStep('idle');
     }
-  // FIX #18: toast dependency'e eklendi
   }, [project, setSubtitleSegments, setProcessing, setProcessingProgress, setProcessingStep, toast]);
 
   const exportVideo = useCallback(async (inputConfig: ExportConfig) => {
@@ -199,7 +207,6 @@ export function useVideoEditor(project: Project) {
     setProcessingStep('encoding');
     setProcessingProgress(0);
 
-    // Relative path'li background music FFmpeg'i crash yapar, temizle
     let config: ExportConfig = (inputConfig.musicPath && !inputConfig.musicPath.startsWith('/'))
       ? { ...inputConfig, musicPath: undefined, musicVolume: undefined }
       : { ...inputConfig };
@@ -243,7 +250,6 @@ export function useVideoEditor(project: Project) {
         }
       });
 
-      // FIX #6: outputPath null kontrolü — null ise hata fırlat
       if (!outputPath) {
         throw new Error('Export returned empty path');
       }
@@ -253,7 +259,6 @@ export function useVideoEditor(project: Project) {
         status: 'exported',
       });
 
-      // FIX: iOS ham path (file:// prefix'siz), Android file:// prefix'li ister
       setProcessingStep('exporting');
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status === 'granted') {
@@ -282,7 +287,6 @@ export function useVideoEditor(project: Project) {
     } finally {
       setProcessing(false);
     }
-  // FIX #18: haptics ve toast dependency'lere eklendi
   }, [project, hasPremium, router, setProcessing, setProcessingProgress, setProcessingStep, updateProject, haptics, toast]);
 
   const seekToTime = useCallback((time: number) => {
