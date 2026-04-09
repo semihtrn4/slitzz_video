@@ -100,8 +100,7 @@ export class FFmpegService {
 
   async removeSilences(
     videoPath: string,
-    keepSegments: TimeSegment[],
-    padding: number = 100
+    keepSegments: TimeSegment[]
   ): Promise<string> {
     await this.ensureLogCallback();
     if (keepSegments.length === 0) return videoPath;
@@ -212,23 +211,20 @@ export class FFmpegService {
     // ─── INPUT ARGÜMANLARI ───────────────────────────────────────────────────
     const args: string[] = [];
 
-    // Sessiz video için anullsrc'yi AYRI INPUT olarak ekle (-f lavfi)
-    // filter_complex içinde tanımlamak FFmpeg'i crash'e götürüyor
-    let audioInputIndex = 0; // 0:a = video'nun kendi sesi
-
+    // KRİTİK #1 & #2: Sessiz video için anullsrc'yi AYRI INPUT olarak ekle
+    // d=${duration} ekleyerek sonsuz stream hatasını önle
     if (!hasAudio) {
-      // Sahte ses kaynağı: ayrı input olarak ekle
-      args.push('-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=44100`);
-      audioInputIndex = 0; // bu durumda video input'u yok, sadece anullsrc var
+      const nullDur = preciseDuration / (config.speed || 1);
+      const safeNullDur = Math.max(nullDur, 1).toFixed(3);
+      args.push('-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=44100:d=${safeNullDur}`);
     }
 
     args.push('-i', rawInputPath);
 
-    // Ses input index'ini güncelle
-    // Eğer anullsrc eklendiyse: anullsrc = input 0, video = input 1
-    // Eğer eklenmezse: video = input 0
+    // KRİTİK #1: Input index'leri netleştir
+    // anullsrc varsa: anullsrc=0, video=1. Yoksa: video=0
     const videoInputIdx = hasAudio ? 0 : 1;
-    const audioInputIdx = hasAudio ? 0 : 0; // anullsrc her zaman 0. input
+    const audioInputIdx = 0; // anullsrc index 0 veya video index 0
 
     let musicInputIdx = -1;
     if (config.musicPath) {
@@ -254,14 +250,8 @@ export class FFmpegService {
     }
 
     // ── 2. SES KAYNAĞI ──
-    if (!hasAudio) {
-      // anullsrc ayrı input olarak eklendi, direkt map et
-      fc.push(`[${audioInputIdx}:a]asetpts=PTS-STARTPTS[a0]`);
-      audioStream = '[a0]';
-    } else {
-      fc.push(`[${audioInputIdx}:a]asetpts=PTS-STARTPTS[a0]`);
-      audioStream = '[a0]';
-    }
+    fc.push(`[${audioInputIdx}:a]asetpts=PTS-STARTPTS[a0]`);
+    audioStream = '[a0]';
 
     // ── 3. TRIM ──
     if (config.trimStart !== undefined || config.trimEnd !== undefined) {
@@ -284,8 +274,10 @@ export class FFmpegService {
       while (s < 0.5) { atempoFilters.push('atempo=0.5'); s *= 2.0; }
       atempoFilters.push(`atempo=${s.toFixed(6)}`);
 
-      fc.push(`${audioStream}${atempoFilters.join(',')}[a2]`);
-      audioStream = '[a2]';
+      if (atempoFilters.length > 0) {
+        fc.push(`${audioStream}${atempoFilters.join(',')}[a2]`);
+        audioStream = '[a2]';
+      }
     }
 
     // ── 5. SUBTITLES ──
@@ -297,17 +289,23 @@ export class FFmpegService {
         const isAss = config.srtPath.toLowerCase().endsWith('.ass');
         const rawSubPath = stripFileProtocol(config.srtPath);
 
-        if (isAss) {
-          // ASS: her platformda daha güvenli, libass olmadan da çalışır çoğu build'de
-          const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-          fc.push(`${videoStream}ass='${escaped}'[v3]`);
+        const { File } = require('expo-file-system');
+        const subFile = new File(config.srtPath);
+        
+        if (subFile.exists) {
+          if (isAss) {
+            // ASS: her platformda daha güvenli, libass olmadan da çalışır çoğu build'de
+            const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
+            fc.push(`${videoStream}ass='${escaped}'[v3]`);
+          } else {
+            // SRT: subtitles filtresi yerine force_style ile dene
+            const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "'\\\\\\''").replace(/:/g, '\\:');
+            fc.push(`${videoStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v3]`);
+          }
+          videoStream = '[v3]';
         } else {
-          // SRT: subtitles filtresi yerine force_style ile dene
-          const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "'\\\\\\''").replace(/:/g, '\\:');
-          fc.push(`${videoStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v3]`);
-        }
-        videoStream = '[v3]';
-      } catch (e) {
+          console.warn('[FFmpeg] Subtitle file not found, skipping:', rawSubPath);
+        }      } catch (e) {
         // Subtitles eklenemezse sessizce devam et — videoyu mahvetme
         console.warn('[FFmpeg] Subtitles filter failed, skipping:', e);
       }
@@ -346,14 +344,15 @@ export class FFmpegService {
       fc.push(`[${musicInputIdx}:a]${musicFilters.join(',')}[a_music]`);
       fc.push(`[a_orig][a_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`);
     } else {
-      // FIX: anull yerine acopy kullanarak ses akışını güvenli bir şekilde passthrough yap
-      fc.push(`[a_orig]acopy[outa]`);
+      // KRİTİK #3: acopy yerine volume=1.0 kullanarak uyumluluğu artır
+      fc.push(`[a_orig]volume=1.0[outa]`);
     }
 
     // filter_complex: tüm parçaları ; ile birleştir
     const filterComplex = fc.join(';');
 
-    console.log('[FFmpeg] filter_complex:\n', filterComplex);
+    // DEBUG: Filter'ı logla
+    console.log('[FFmpeg] Final filter_complex:', filterComplex);
 
     // ─── KALAN ARGÜMANLAR ────────────────────────────────────────────────────
     args.push(
@@ -385,7 +384,7 @@ export class FFmpegService {
     const session = await FFmpegKit.executeWithArguments(args);
     const returnCode = await session.getReturnCode();
 
-    FFmpegKitConfig.enableStatisticsCallback(undefined);
+    FFmpegKitConfig.enableStatisticsCallback(null as any);
 
     if (ReturnCode.isSuccess(returnCode)) {
       onProgress?.(1, 'Complete');
@@ -467,8 +466,9 @@ export class FFmpegService {
       const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
 
       return { duration, width: w, height: h, fps, hasAudio, hasVideo };
-    } catch {
-      return { duration: 0, width: 1080, height: 1920, fps: 30, hasAudio: false, hasVideo: false };
+    } catch (err) {
+      console.error('[FFmpeg] getVideoInfo failed:', err);
+      throw new Error(`Cannot read video info: ${err}`);
     }
   }
 

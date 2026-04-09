@@ -11,7 +11,7 @@ import { transcriptionService } from '../services/transcriptionService';
 import { silenceService } from '../services/silenceService';
 import { useHaptics } from './useHaptics';
 import { useToast } from './useToast';
-import type { Project, LanguageCode, ExportConfig } from '../types';
+import type { Project, LanguageCode, ExportConfig, ProcessingStep } from '../types';
 
 export function useVideoEditor(project: Project) {
   const router = useRouter();
@@ -54,7 +54,7 @@ export function useVideoEditor(project: Project) {
       }
 
       setProcessingStep('extracting-audio');
-      const audioPath = await ffmpegService.extractAudio(project.originalVideoPath);
+      const audioPath = await ffmpegService.extractAudio(project.originalVideoPath, true);
 
       setProcessingStep('detecting-silences');
       const segments = await ffmpegService.detectSilences(
@@ -95,8 +95,7 @@ export function useVideoEditor(project: Project) {
     try {
       const outputPath = await ffmpegService.removeSilences(
         project.originalVideoPath,
-        keepSegments,
-        silenceSettings.padding
+        keepSegments
       );
 
       updateProject(project.id, {
@@ -142,7 +141,14 @@ export function useVideoEditor(project: Project) {
         audioPath,
         language,
         (step) => {
-          setProcessingStep(step as any);
+          const validSteps: ProcessingStep[] = [
+            'idle', 'probing-video', 'extracting-audio', 'detecting-silences',
+            'transcribing', 'generating-subtitles', 'applying-cuts',
+            'burning-subtitles', 'encoding', 'exporting', 'complete', 'error'
+          ];
+          if (validSteps.includes(step as ProcessingStep)) {
+            setProcessingStep(step as ProcessingStep);
+          }
         }
       );
 
@@ -199,7 +205,14 @@ export function useVideoEditor(project: Project) {
 
       const outputPath = await ffmpegService.exportVideo(config, hasPremium, (progress, step) => {
         setProcessingProgress(progress);
-        setProcessingStep(step as any);
+        const validSteps: ProcessingStep[] = [
+          'idle', 'probing-video', 'extracting-audio', 'detecting-silences',
+          'transcribing', 'generating-subtitles', 'applying-cuts',
+          'burning-subtitles', 'encoding', 'exporting', 'complete', 'error'
+        ];
+        if (validSteps.includes(step as ProcessingStep)) {
+          setProcessingStep(step as ProcessingStep);
+        }
       });
 
       // FIX #6: outputPath null kontrolü — null ise hata fırlat

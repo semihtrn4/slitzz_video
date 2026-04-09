@@ -75,8 +75,7 @@
         }
       ],
       "./plugins/withAndroidNamespace",
-      "./plugins/withFFmpegKit",
-      "./plugins/withIosFFmpegKit"
+      "./plugins/withFFmpegKit"
     ],
     "experiments": {
       "typedRoutes": true
