@@ -69,18 +69,28 @@ export class FFmpegService {
     const ext = forWhisper ? 'wav' : 'm4a';
     const audioPath = getPath(Paths.cache, `extracted_audio_${Date.now()}.${ext}`);
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
-    // HAM PATH döndür — file:// prefix'siz
-    const rawAudioPath = stripFileProtocol(audioPath);
 
-    let command = '';
-    if (forWhisper) {
-      command = `-i "${absVideoPath}" -vn -ar 16000 -ac 1 -c:a pcm_s16le -y "${rawAudioPath}"`;
-    } else {
-      // FIX: -acodec copy yerine -c:a aac kullanarak her türlü kaynak sesi uyumlu hale getir
-      command = `-i "${absVideoPath}" -vn -c:a aac -q:a 2 -y "${rawAudioPath}"`;
+    // Dosya varlığını kontrol et
+    try {
+      const { File } = require('expo-file-system');
+      const videoFile = new File(videoPath);
+      if (!videoFile.exists) {
+        throw new Error(`Input file NOT FOUND: ${videoPath}`);
+      }
+    } catch (e) {
+      console.warn('[FFmpeg] Pre-check failed (checking URI):', videoPath);
     }
 
-    const session = await FFmpegKit.execute(command);
+    const rawAudioPath = stripFileProtocol(audioPath);
+
+    let args: string[] = [];
+    if (forWhisper) {
+      args = ['-i', absVideoPath, '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-y', rawAudioPath];
+    } else {
+      args = ['-i', absVideoPath, '-vn', '-c:a', 'aac', '-q:a', '2', '-y', rawAudioPath];
+    }
+
+    const session = await FFmpegKit.executeWithArguments(args);
     const returnCode = await session.getReturnCode();
 
     if (ReturnCode.isSuccess(returnCode)) {
@@ -485,16 +495,17 @@ export class FFmpegService {
     fps: number;
     hasAudio: boolean;
     hasVideo: boolean;
+    rawOutput?: string;
   }> {
     await this.ensureLogCallback();
     try {
       const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
-      const session = await FFmpegKit.execute(`-i "${absVideoPath}" -hide_banner`);
+      const session = await FFmpegKit.executeWithArguments(['-i', absVideoPath, '-hide_banner']);
       const logs = await session.getLogs();
       const output = logs.map((l: Log) => l.getMessage()).join('\n');
 
-      const hasAudio = output.includes('Audio:');
-      const hasVideo = output.includes('Video:');
+      const hasAudio = output.toLowerCase().includes('audio:');
+      const hasVideo = output.toLowerCase().includes('video:');
 
       const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d+)/);
       let duration = 0;
@@ -513,7 +524,7 @@ export class FFmpegService {
       const fpsMatch = output.match(/(\d+(?:\.\d+)?) fps/);
       const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
 
-      return { duration, width: w, height: h, fps, hasAudio, hasVideo };
+      return { duration, width: w, height: h, fps, hasAudio, hasVideo, rawOutput: output };
     } catch (err) {
       console.error('[FFmpeg] getVideoInfo failed for path:', videoPath, err);
       throw new Error(`Cannot read video info (PROBE FAILED).\nPath: ${videoPath}\nError: ${err}`);

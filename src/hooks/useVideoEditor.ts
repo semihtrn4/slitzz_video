@@ -50,7 +50,9 @@ export function useVideoEditor(project: Project) {
       setProcessingStep('probing-video');
       const info = await ffmpegService.getVideoInfo(project.originalVideoPath);
       if (!info.hasAudio) {
-        toast.show('This video has no audio to detect silences from.', 'info');
+        const raw = info.rawOutput || 'No probe output';
+        console.warn('[DetectSilences] No audio. Probe:', raw);
+        toast.show(`SES BULUNAMADI: Detect silences failed. Probe info: ${raw.substring(0, 100)}...`, 'error');
         return;
       }
 
@@ -135,7 +137,7 @@ export function useVideoEditor(project: Project) {
       }
 
       if (!hasAudio) {
-        toast.show('This video has no audio to transcribe.', 'info');
+        toast.show('Bu videoda transkribe edilecek ses bulunamadı. (No audio in probe)', 'error');
         return;
       }
 
