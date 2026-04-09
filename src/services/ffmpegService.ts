@@ -302,7 +302,7 @@ export class FFmpegService {
           fc.push(`${videoStream}ass='${escaped}'[v3]`);
         } else {
           // SRT: subtitles filtresi yerine force_style ile dene
-          const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
+          const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "'\\\\\\''").replace(/:/g, '\\:');
           fc.push(`${videoStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v3]`);
         }
         videoStream = '[v3]';
@@ -400,6 +400,35 @@ export class FFmpegService {
     }
   }
 
+  async checkSystem(): Promise<{ success: boolean; version: string; error?: string }> {
+    try {
+      const session = await FFmpegKit.execute("-version");
+      const returnCode = await session.getReturnCode();
+      const logs = await session.getLogs();
+      const output = logs.map((l: Log) => l.getMessage()).join('\n');
+
+      if (ReturnCode.isSuccess(returnCode)) {
+        return {
+          success: true,
+          version: output.split('\n')[0]
+        };
+      } else {
+        const failStack = await session.getFailStackTrace();
+        return {
+          success: false,
+          version: "Bilinmiyor",
+          error: failStack || "FFmpeg native bridge hatası."
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        version: "Hata",
+        error: err.message
+      };
+    }
+  }
+
   async getVideoInfo(videoPath: string): Promise<{
     duration: number;
     width: number;
@@ -418,17 +447,17 @@ export class FFmpegService {
       const hasAudio = output.includes('Audio:');
       const hasVideo = output.includes('Video:');
 
-      const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
+      const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d+)/);
       let duration = 0;
       if (durationMatch) {
         duration =
           parseInt(durationMatch[1]) * 3600 +
           parseInt(durationMatch[2]) * 60 +
           parseInt(durationMatch[3]) +
-          parseInt(durationMatch[4]) / 100;
+          parseInt(durationMatch[4]) / Math.pow(10, durationMatch[4].length);
       }
 
-      const resMatch = output.match(/(\d{2,4})x(\d{2,4})/);
+      const resMatch = output.match(/(\d{2,5})x(\d{2,5})/);
       const w = resMatch ? parseInt(resMatch[1]) : 1080;
       const h = resMatch ? parseInt(resMatch[2]) : 1920;
 

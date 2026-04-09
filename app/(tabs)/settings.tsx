@@ -27,6 +27,7 @@ import {
   FileText,
   HelpCircle,
   Download,
+  Activity,
 } from 'lucide-react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
@@ -34,6 +35,7 @@ import { Colors } from '@/src/constants/colors';
 import { useSubscriptionStore } from '@/src/stores/subscriptionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { transcriptionService } from '@/src/services/transcriptionService';
+import { ffmpegService } from '@/src/services/ffmpegService';
 import { RESOLUTION_OPTIONS } from '@/src/constants/exportPresets';
 import { ASPECT_RATIOS } from '@/src/constants/subtitleStyles';
 import type { Resolution, AspectRatio } from '@/src/types';
@@ -64,16 +66,13 @@ export default function SettingsScreen() {
       try {
         const cacheDir = new Directory(Paths.cache);
         if (cacheDir.exists) {
-          // list() her entry için size bilgisi olmayabilir, güvenli toplama
           let totalBytes = 0;
           const entries = cacheDir.list();
           for (const entry of entries) {
             try {
               const s = (entry as any).size;
               if (typeof s === 'number') totalBytes += s;
-            } catch {
-              // boyut alınamazsa atla
-            }
+            } catch { }
           }
           setStorageUsed(Math.round(totalBytes / (1024 * 1024)));
         }
@@ -123,6 +122,27 @@ export default function SettingsScreen() {
         },
       ]
     );
+  };
+
+  const handleTestFFmpeg = async () => {
+    try {
+      const result = await ffmpegService.checkSystem();
+      if (result.success) {
+        Alert.alert(
+          '✅ FFmpeg Calisiyor',
+          `Sürüm: ${result.version}\n\nNative bridge aktif ve komutları başarıyla işliyor.`,
+          [{ text: 'Tamam' }]
+        );
+      } else {
+        Alert.alert(
+          '❌ FFmpeg Hatası',
+          `FFmpeg kütüphanesi başlatılamadı.\n\nHata: ${result.error}`,
+          [{ text: 'Tamam' }]
+        );
+      }
+    } catch (err: any) {
+      Alert.alert('Hata', `Test sırasında bir hata oluştu: ${err.message}`);
+    }
   };
 
   const handleUpgrade = () => {
@@ -375,22 +395,39 @@ export default function SettingsScreen() {
       <Animated.View entering={FadeIn.delay(700)} style={styles.section}>
         <Text style={[styles.sectionTitle, { color: danger }]}>Geliştirici Ayarları (Test)</Text>
         <View style={[styles.card, { borderColor: danger }]}>
+            <View style={styles.switchRow}>
+              <View style={styles.switchRowLeft}>
+                <Sparkles size={20} color={danger} />
+                <View>
+                  <Text style={[styles.rowLabel, { color: danger, fontWeight: 'bold' }]}>Pro Özellikleri Test Et</Text>
+                  <Text style={{ fontSize: 11, color: textSecondary }}>
+                    Bu buton aktifken tüm kilitler kalkar.
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                value={debugProMode}
+                onValueChange={toggleDebugProMode}
+                trackColor={{ false: border, true: `${danger}50` }}
+                thumbColor={debugProMode ? danger : textSecondary}
+              />
+            </View>
           <View style={styles.switchRow}>
             <View style={styles.switchRowLeft}>
-              <Sparkles size={20} color={danger} />
+              <Activity size={20} color={danger} />
               <View>
-                <Text style={[styles.rowLabel, { color: danger, fontWeight: 'bold' }]}>Pro Özellikleri Test Et</Text>
+                <Text style={[styles.rowLabel, { color: danger, fontWeight: 'bold' }]}>FFmpeg Tanı Aracı</Text>
                 <Text style={{ fontSize: 11, color: textSecondary }}>
-                  Bu buton aktifken tüm kilitler kalkar.
+                  Kütüphanenin düzgün çalışıp çalışmadığını test et.
                 </Text>
               </View>
             </View>
-            <Switch
-              value={debugProMode}
-              onValueChange={toggleDebugProMode}
-              trackColor={{ false: border, true: `${danger}50` }}
-              thumbColor={debugProMode ? danger : textSecondary}
-            />
+            <TouchableOpacity 
+              style={[styles.downloadButton, { backgroundColor: danger }]} 
+              onPress={handleTestFFmpeg}
+            >
+              <Text style={styles.downloadButtonText}>Test Et</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Animated.View>
