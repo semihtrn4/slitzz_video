@@ -40,7 +40,6 @@ export class FFmpegService {
     const failStack = await session.getFailStackTrace();
     const allLogs = logs.map((l: any) => l.getMessage()).join('\n');
 
-    // Log boşsa global buffer'dan son satırları çek
     // Bu Android'de native crash sonrası "No log" yerine gerçek hatayı gösterir
     if (!allLogs && !failStack) {
       const globalBuf = FFmpegService.lastGlobalLogs.slice(-30).join('\n');
@@ -50,7 +49,13 @@ export class FFmpegService {
       return 'No log output available (Native Crash or Missing Stream)';
     }
 
-    return `LOGS:\n${allLogs}\n\nSTACK TRACE:\n${failStack || 'None'}`;
+    // KRİTİK: Logların BAŞINI değil, SONUNU göster (Hata sonlardadır)
+    const logLines = allLogs.split('\n');
+    const logTail = logLines.length > 40 
+      ? '... (logs truncated) ...\n' + logLines.slice(-40).join('\n')
+      : allLogs;
+
+    return `FFMPEG ERROR (Tail):\n${logTail}\n\nSTACK TRACE:\n${failStack || 'None'}`;
   }
 
   private throwIfNativeUnavailable() {
@@ -461,7 +466,7 @@ export class FFmpegService {
     // veriyordu (-f lavfi -i anullsrc). Bu Android'de native crash yapıyor.
     // Yeni yaklaşım: anullsrc filter_complex İÇİNDE source node olarak tanımlanır.
 
-    const args: string[] = [];
+    const args: string[] = ['-hide_banner'];
     args.push('-i', rawInputPath);           // Her zaman input[0] = video dosyası
     const videoIdx = 0;                       // Video her zaman input 0
 
@@ -623,6 +628,7 @@ export class FFmpegService {
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'fast',
+      '-pix_fmt', 'yuv420p',       // Sosyal medya ve galeri uyumluluğu için KRİTİK
       '-b:v', is4K ? '10M' : '5M',
       '-c:a', 'aac',
       '-b:a', '128k',
