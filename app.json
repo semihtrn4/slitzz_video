@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "slitzcut",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
@@ -75,7 +75,8 @@
         }
       ],
       "./plugins/withAndroidNamespace",
-      "./plugins/withFFmpegKit"
+      "./plugins/withFFmpegKit",
+      "./plugins/withIosFFmpegKit"
     ],
     "experiments": {
       "typedRoutes": true
