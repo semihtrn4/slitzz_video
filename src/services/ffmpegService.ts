@@ -26,8 +26,8 @@ export class FFmpegService {
   private async isNativeAvailable(): Promise<boolean> {
     if (this._nativeAvailable !== null) return this._nativeAvailable;
     try {
-      // FFmpegKit null ise bu hata fırlatır
-      const session = await FFmpegKit.execute('-version');
+      // ✅ FIX: execute(string) → executeWithArguments(array)
+      const session = await FFmpegKit.executeWithArguments(['-version']);
       this._nativeAvailable = session != null;
     } catch {
       this._nativeAvailable = false;
@@ -120,12 +120,16 @@ export class FFmpegService {
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
     // ── AŞAMA 1: FFprobeKit JSON (varsa — en güvenilir yöntem) ──────────────
-    // FFprobeKit codec_type field'ını JSON olarak döndürür, metin parse gerekmez
     try {
       if (typeof FFprobeKit !== 'undefined' && FFprobeKit !== null) {
-        const probeSession = await FFprobeKit.execute(
-          `-v quiet -print_format json -show_streams -show_format "${absVideoPath}"`
-        );
+        // ✅ FIX: execute(string) → executeWithArguments(array)
+        const probeSession = await FFprobeKit.executeWithArguments([
+          '-v', 'quiet',
+          '-print_format', 'json',
+          '-show_streams',
+          '-show_format',
+          absVideoPath
+        ]);
         const probeLogs = await probeSession.getLogs();
         const probeOutput = probeLogs.map((l: Log) => l.getMessage()).join('');
 
@@ -164,9 +168,9 @@ export class FFmpegService {
 
     // ── AŞAMA 2: FFmpeg -i metin parse ──────────────────────────────────────
     // KRİTİK: Android'de session logları bazen boş gelir.
-    // Çözüm: global buffer'ı temizle, -i çalıştır, hem session hem global'den birleştir.
     FFmpegService.lastGlobalLogs = [];
 
+    // ✅ FIX: execute(string) → executeWithArguments(array)
     const infoSession = await FFmpegKit.executeWithArguments(['-hide_banner', '-i', absVideoPath]);
     const infoLogs = await infoSession.getLogs();
     let infoOutput = infoLogs.map((l: Log) => l.getMessage()).join('\n');
@@ -177,12 +181,10 @@ export class FFmpegService {
       console.warn('[FFmpeg] Session logs empty, fallback to global buffer. Chars:', infoOutput.length);
     }
 
-    // Her ikisini birleştir (bazı cihazlarda ikisi de kısmi olabilir)
+    // Her ikisini birleştir
     const combinedOutput = infoOutput + '\n' + FFmpegService.lastGlobalLogs.join('\n');
     console.log('[FFmpeg] probe combined output (800 chars):', combinedOutput.substring(0, 800));
 
-    // Ses/video stream varlığını regex ile kontrol et
-    // "Stream #0:1(und): Audio: aac" formatını ve basit "audio:" formatını yakala
     let hasAudioFromText =
       /Stream\s+#\d+:\d+[^:]*:\s*Audio:/i.test(combinedOutput) ||
       combinedOutput.toLowerCase().includes('audio:');
@@ -191,7 +193,6 @@ export class FFmpegService {
       /Stream\s+#\d+:\d+[^:]*:\s*Video:/i.test(combinedOutput) ||
       combinedOutput.toLowerCase().includes('video:');
 
-    // Duration — "Duration: 00:01:02.03" formatını parse et
     const durationMatch = combinedOutput.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d+)/);
     let duration = 0;
     if (durationMatch) {
@@ -202,31 +203,27 @@ export class FFmpegService {
         parseInt(durationMatch[4]) / Math.pow(10, durationMatch[4].length);
     }
 
-    // Çözünürlük — "1080x1920" formatını yakala
     const resMatch = combinedOutput.match(/(\d{2,5})x(\d{2,5})/);
     const w = resMatch ? parseInt(resMatch[1]) : 1080;
     const h = resMatch ? parseInt(resMatch[2]) : 1920;
 
-    // FPS — "30 fps" veya "29.97 fps" formatını yakala
     const fpsMatch = combinedOutput.match(/(\d+(?:\.\d+)?)\s*fps/);
     const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
 
     console.log(`[FFmpeg -i] hasAudio (text): ${hasAudioFromText}, hasVideo: ${hasVideoFromText}`);
 
     // ── AŞAMA 3: Ses algılanamadıysa 1 saniyelik extract testi ──────────────
-    // Android'de log kesilebilir ve metin parse yanlış sonuç verebilir.
-    // Gerçekten 1s ses çıkarmayı dene: başarılıysa ses KESİNLİKLE var.
-    // Başarısızsa metin parse sonucunu koru (false negative tercih edilir).
     if (!hasAudioFromText) {
       console.log('[FFmpeg] Audio not detected in text, running 1s extract test...');
       try {
         const testPath = getPath(Paths.cache, `audio_test_${Date.now()}.m4a`);
         const rawTestPath = stripFileProtocol(testPath);
 
+        // ✅ FIX: execute(string) → executeWithArguments(array)
         const testSession = await FFmpegKit.executeWithArguments([
           '-i', absVideoPath,
-          '-vn',        // video alma, sadece ses
-          '-t', '1',    // sadece ilk 1 saniye
+          '-vn',
+          '-t', '1',
           '-c:a', 'aac',
           '-y', rawTestPath
         ]);
@@ -234,7 +231,6 @@ export class FFmpegService {
         const testCode = await testSession.getReturnCode();
 
         if (ReturnCode.isSuccess(testCode)) {
-          // Dosya oluştu, boyutunu kontrol et (> 100 byte = gerçek ses verisi var)
           try {
             const { File } = require('expo-file-system');
             const testFile = new File(testPath);
@@ -245,7 +241,6 @@ export class FFmpegService {
               console.log('[FFmpeg] 1s extract test: file too small, hasAudio=false');
             }
           } catch {
-            // size check başarısızsa, komut başarılı olduğu için true say
             console.log('[FFmpeg] 1s extract test PASSED (size check skipped) — hasAudio=true');
             hasAudioFromText = true;
           }
@@ -274,7 +269,6 @@ export class FFmpegService {
     const audioPath = getPath(Paths.cache, `extracted_audio_${Date.now()}.${ext}`);
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
-    // Dosya varlığını kontrol et
     try {
       const { File } = require('expo-file-system');
       const videoFile = new File(videoPath);
@@ -296,12 +290,11 @@ export class FFmpegService {
       args = ['-i', absVideoPath, '-vn', '-c:a', 'aac', '-q:a', '2', '-y', rawAudioPath];
     }
 
+    // ✅ Already using executeWithArguments — correct
     const session = await FFmpegKit.executeWithArguments(args);
     const returnCode = await session.getReturnCode();
 
     if (ReturnCode.isSuccess(returnCode)) {
-      // forWhisper ise ham path döndür (whisper native modül bunu bekler)
-      // normal ise file:// prefix'li döndür (expo-av için)
       return forWhisper ? rawAudioPath : audioPath;
     } else {
       const output = await this.getSessionOutput(session);
@@ -316,9 +309,16 @@ export class FFmpegService {
     const rawThumbnailPath = stripFileProtocol(thumbnailPath);
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
-    const session = await FFmpegKit.execute(
-      `-ss ${timeSeconds} -i "${absVideoPath}" -vframes 1 -q:v 2 -y "${rawThumbnailPath}"`
-    );
+    // ✅ FIX: execute(string) → executeWithArguments(array)
+    // "Error splitting the argument list" hatasını önler
+    const session = await FFmpegKit.executeWithArguments([
+      '-ss', String(timeSeconds),
+      '-i', absVideoPath,
+      '-vframes', '1',
+      '-q:v', '2',
+      '-y', rawThumbnailPath
+    ]);
+
     const returnCode = await session.getReturnCode();
 
     if (ReturnCode.isSuccess(returnCode)) {
@@ -337,9 +337,15 @@ export class FFmpegService {
   ): Promise<SilenceSegment[]> {
     await this.ensureLogCallback();
     const rawAudioPath = stripFileProtocol(audioPath);
-    const session = await FFmpegKit.execute(
-      `-i "${rawAudioPath}" -af silencedetect=n=${threshold}dB:d=${minDuration} -f null -`
-    );
+
+    // ✅ FIX: execute(string) → executeWithArguments(array)
+    // silencedetect filter'ını ayrı argüman olarak ver — parse hatası olmaz
+    const session = await FFmpegKit.executeWithArguments([
+      '-i', rawAudioPath,
+      '-af', `silencedetect=n=${threshold}dB:d=${minDuration}`,
+      '-f', 'null',
+      '-'
+    ]);
 
     const logs = await session.getLogs();
     const allOutput = logs.map((l: Log) => l.getMessage()).join('\n');
@@ -379,9 +385,17 @@ export class FFmpegService {
       });
       filter += `${streams}concat=n=${keepSegments.length}:v=1:a=1[vout][aout]`;
 
-      const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[vout]" -map "[aout]" -c:v libx264 -preset superfast -c:a aac -y "${rawOutputPath}"`
-      );
+      // ✅ FIX: execute(string) → executeWithArguments(array)
+      const session = await FFmpegKit.executeWithArguments([
+        '-i', absVideoPath,
+        '-filter_complex', filter,
+        '-map', '[vout]',
+        '-map', '[aout]',
+        '-c:v', 'libx264',
+        '-preset', 'superfast',
+        '-c:a', 'aac',
+        '-y', rawOutputPath
+      ]);
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
       const logs = await session.getLogs();
       throw new Error(`FFmpeg silence removal failed (Audio+Video): ${logs[logs.length - 1]?.getMessage()}`);
@@ -393,9 +407,16 @@ export class FFmpegService {
       });
       filter += `${streams}concat=n=${keepSegments.length}:v=1:a=0[vout]`;
 
-      const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[vout]" -c:v libx264 -preset superfast -an -y "${rawOutputPath}"`
-      );
+      // ✅ FIX: execute(string) → executeWithArguments(array)
+      const session = await FFmpegKit.executeWithArguments([
+        '-i', absVideoPath,
+        '-filter_complex', filter,
+        '-map', '[vout]',
+        '-c:v', 'libx264',
+        '-preset', 'superfast',
+        '-an',
+        '-y', rawOutputPath
+      ]);
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
       const logs = await session.getLogs();
       throw new Error(`FFmpeg silence removal failed (Video Only): ${logs[logs.length - 1]?.getMessage()}`);
@@ -407,9 +428,14 @@ export class FFmpegService {
       });
       filter += `${streams}concat=n=${keepSegments.length}:v=0:a=1[aout]`;
 
-      const session = await FFmpegKit.execute(
-        `-i "${absVideoPath}" -filter_complex "${filter}" -map "[aout]" -c:a aac -y "${rawOutputPath}"`
-      );
+      // ✅ FIX: execute(string) → executeWithArguments(array)
+      const session = await FFmpegKit.executeWithArguments([
+        '-i', absVideoPath,
+        '-filter_complex', filter,
+        '-map', '[aout]',
+        '-c:a', 'aac',
+        '-y', rawOutputPath
+      ]);
       if (ReturnCode.isSuccess(await session.getReturnCode())) return outputPath;
       const output = await this.getSessionOutput(session);
       console.error('[FFmpeg] Silence removal failed (Audio Only):', output);
@@ -474,51 +500,40 @@ export class FFmpegService {
     // Ses VAR → input[0]=video (ses de burada)
     // Müzik VAR → input[1]
     //
-    // NOT: Eski kod 'hasAudio=false' durumunda anullsrc'yi ayrı input olarak
-    // veriyordu (-f lavfi -i anullsrc). Bu Android'de native crash yapıyor.
-    // Yeni yaklaşım: anullsrc filter_complex İÇİNDE source node olarak tanımlanır.
+    // NOT: anullsrc filter_complex İÇİNDE source node olarak tanımlanır.
+    // '-f lavfi -i anullsrc' input olarak vermek Android'de native crash yapıyor.
 
     const args: string[] = [];
     args.push('-i', rawInputPath);           // Her zaman input[0] = video dosyası
-    const videoIdx = 0;                       // Video her zaman input 0
+    const videoIdx = 0;
 
     let musicInputIdx = -1;
     if (config.musicPath) {
       const absMusicPath = stripFileProtocol(ensureAbsolute(config.musicPath));
       args.push('-stream_loop', '-1', '-i', absMusicPath);
-      musicInputIdx = 1;                      // Müzik her zaman input 1 (varsa)
+      musicInputIdx = 1;
     }
 
     // ─── FILTER COMPLEX ──────────────────────────────────────────────────────
-    // KURAL: fc dizisindeki her eleman noktalı virgül ile join edilir.
-    // vStream ve aStream değişkenleri aktif stream etiketlerini tutar.
-    // vIdx/aIdx her filtre adımında artırılır — isim çakışması olmaz.
-
     const fc: string[] = [];
-    let vStream = '';   // aktif video stream etiketi, örn: [v0], [v1]...
-    let aStream = '';   // aktif audio stream etiketi, örn: [a0], [a1]...
-    let vIdx = 0;       // video filtre sayacı
-    let aIdx = 0;       // audio filtre sayacı
+    let vStream = '';
+    let aStream = '';
+    let vIdx = 0;
+    let aIdx = 0;
 
     // ── 1. VİDEO KAYNAĞI ────────────────────────────────────────────────────
     if (!hasVideo) {
-      // Video stream yoksa siyah ekran üret
       fc.push(`color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(3)}[v${vIdx}]`);
     } else {
-      // Video var: ölçekle, padding ekle, SAR düzelt
       fc.push(`[${videoIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${vIdx}]`);
     }
     vStream = `[v${vIdx}]`;
 
     // ── 2. SES KAYNAĞI ──────────────────────────────────────────────────────
     // KRİTİK: Ses yoksa anullsrc'yi filter_complex IÇINDE tanımla.
-    // '-f lavfi -i anullsrc' input olarak vermek Android'de native crash yapıyor.
-    // filter_complex içindeki anullsrc source node tamamen güvenli.
     if (hasAudio) {
-      // Gerçek ses: video input'unun audio stream'ini al, timestamp sıfırla
       fc.push(`[${videoIdx}:a]asetpts=PTS-STARTPTS[a${aIdx}]`);
     } else {
-      // Sahte ses: filter_complex içinde anullsrc source node
       const nullDur = Math.max(estimatedDuration, 1).toFixed(3);
       fc.push(`anullsrc=channel_layout=stereo:sample_rate=44100:d=${nullDur}[a${aIdx}]`);
     }
@@ -534,7 +549,7 @@ export class FFmpegService {
       vStream = `[v${vIdx}]`;
 
       // anullsrc için atrim gereksiz (d= ile süresi zaten ayarlandı)
-      // ama gerçek ses için gerekli
+      // Gerçek ses için gerekli
       if (hasAudio) {
         aIdx++;
         fc.push(`${aStream}atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[a${aIdx}]`);
@@ -564,21 +579,17 @@ export class FFmpegService {
     if (config.srtPath && config.includeSubtitles) {
       try {
         const isAss = config.srtPath.toLowerCase().endsWith('.ass');
-        // stripFileProtocol ile file:// prefix'ini kaldır — File() ve FFmpeg için
+        // stripFileProtocol ile file:// prefix'ini kaldır
         const rawSubPath = stripFileProtocol(ensureAbsolute(config.srtPath));
         const { File } = require('expo-file-system');
-        // Exists kontrolü rawSubPath ile yap (file:// olmadan)
         const subFile = new File(rawSubPath);
 
         if (subFile.exists) {
           vIdx++;
           if (isAss) {
-            // ASS: her platformda daha güvenli
-            // Android path'lerinde boşluk ve özel karakter escape
             const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
             fc.push(`${vStream}ass='${escaped}'[v${vIdx}]`);
           } else {
-            // SRT: force_style ile
             const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
             fc.push(`${vStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v${vIdx}]`);
           }
@@ -588,7 +599,6 @@ export class FFmpegService {
           console.warn('[FFmpeg] Subtitle file not found, skipping:', rawSubPath);
         }
       } catch (e) {
-        // Subtitles eklenemezse sessizce devam et — videoyu mahvetme
         console.warn('[FFmpeg] Subtitles filter failed, skipping:', e);
       }
     }
@@ -600,7 +610,9 @@ export class FFmpegService {
       vStream = `[v${vIdx}]`;
     }
 
-    // ── 7. SES VOLUME + FADE ────────────────────────────────────────────────
+    // ── 7. SES VOLUME + FADE + MÜZİK MİX ───────────────────────────────────
+    // ✅ FIX: [a_orig] → [outa] çift node kaldırıldı.
+    // Müzik yoksa direkt [outa]'ya bağla — Android'de ara node crash yapıyordu.
     const volVal = Math.max(0, Math.min(2, (config.audioVolume ?? 100) / 100));
     const finalVol = volVal.toFixed(4);
     const audioFilters: string[] = [`volume=${finalVol}`];
@@ -612,9 +624,8 @@ export class FFmpegService {
       audioFilters.push(`afade=t=out:st=${Math.max(0, estimatedDuration - 1).toFixed(3)}:d=1`);
     }
 
-    // ── 8. MÜZİK MİX ───────────────────────────────────────────────────────
     if (config.musicPath && musicInputIdx >= 0 && config.musicVolume !== undefined) {
-      // Müzik var: önce [a_orig] ara node'u oluştur, sonra mix
+      // Müzik var: [a_orig] ara node → amix → [outa]
       fc.push(`${aStream}${audioFilters.join(',')}[a_orig]`);
 
       const mVol = Math.max(0, Math.min(2, config.musicVolume / 100)).toFixed(4);
@@ -628,15 +639,14 @@ export class FFmpegService {
       fc.push(`[${musicInputIdx}:a]${musicFilters.join(',')}[a_music]`);
       fc.push(`[a_orig][a_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`);
     } else {
-      // Müzik yok: ara node olmadan direkt [outa]'ya bağla
-      // [a_orig] → volume=1.0 → [outa] zinciri Android'de kırılıyordu
+      // ✅ FIX: Müzik yok → ara node olmadan direkt [outa]
       fc.push(`${aStream}${audioFilters.join(',')}[outa]`);
     }
 
     // filter_complex: tüm parçaları ; ile birleştir
     const filterComplex = fc.join(';');
 
-    // DEBUG: Her filter adımını ayrı ayrı logla — hangisinde hata var kolayca görülür
+    // DEBUG logları
     console.log('[FFmpeg] === FILTER COMPLEX STEPS ===');
     fc.forEach((step, i) => console.log(`[FFmpeg] fc[${i}]: ${step}`));
     console.log('[FFmpeg] === FULL filter_complex ===');
@@ -644,16 +654,20 @@ export class FFmpegService {
     console.log(`[FFmpeg] vStream final: ${vStream}, aStream final: ${aStream}`);
 
     // ─── KALAN ARGÜMANLAR ────────────────────────────────────────────────────
+    // ✅ FIX: vStream köşeli parantezlerini güvenli şekilde geç
+    // "[v2]" formatı bazı Android sürümlerinde parse hatasına yol açıyor
+    const vStreamLabel = vStream.replace(/[\[\]]/g, ''); // "v2"
+
     args.push(
       '-filter_complex', filterComplex,
-      '-map', vStream,
+      '-map', `[${vStreamLabel}]`,
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'fast',
       '-b:v', is4K ? '10M' : '5M',
       '-c:a', 'aac',
       '-b:a', '128k',
-      '-movflags', '+faststart',   // MP4 header'ı başa al — galeri oynatıcılar için kritik
+      '-movflags', '+faststart',
       // NOT: hasAudio=false durumunda -shortest KALDIRILDI.
       // anullsrc süresi zaten preciseDuration kadar ayarlı.
       // -shortest + anullsrc kombinasyonu Android'de native crash yapıyor.
@@ -674,6 +688,7 @@ export class FFmpegService {
       }
     });
 
+    // ✅ Already using executeWithArguments — correct
     const session = await FFmpegKit.executeWithArguments(args);
     const returnCode = await session.getReturnCode();
 
@@ -685,13 +700,11 @@ export class FFmpegService {
       console.log(`[FFmpeg] Output: ${rawOutputPath}`);
       return outputPath;
     } else {
-      // Tüm session loglarını tek tek yazdır — asıl hata satırını bul
       const sessionLogs = await session.getLogs();
       console.error('[FFmpeg] === EXPORT FAILED ===');
       console.error(`[FFmpeg] Return code: ${await session.getReturnCode()}`);
       sessionLogs.forEach((l: any, i: number) => {
         const msg = l.getMessage();
-        // Sadece hata içeren satırları öne çıkar
         if (msg.includes('Error') || msg.includes('error') || msg.includes('Invalid') ||
           msg.includes('No such') || msg.includes('failed') || msg.includes('matches no')) {
           console.error(`[FFmpeg] !! HATA SATIRI [${i}]: ${msg}`);
@@ -708,7 +721,8 @@ export class FFmpegService {
 
   async checkSystem(): Promise<{ success: boolean; version: string; error?: string }> {
     try {
-      const session = await FFmpegKit.execute("-version");
+      // ✅ FIX: execute(string) → executeWithArguments(array)
+      const session = await FFmpegKit.executeWithArguments(['-version']);
       const returnCode = await session.getReturnCode();
       const logs = await session.getLogs();
       const output = logs.map((l: Log) => l.getMessage()).join('\n');
