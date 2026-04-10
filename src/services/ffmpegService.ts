@@ -186,12 +186,10 @@ export class FFmpegService {
     console.log('[FFmpeg] probe combined output (800 chars):', combinedOutput.substring(0, 800));
 
     let hasAudioFromText =
-      /Stream\s+#\d+:\d+[^:]*:\s*Audio:/i.test(combinedOutput) ||
-      combinedOutput.toLowerCase().includes('audio:');
+      /Stream\s+#\d+:\d+[^:]*:\s*Audio:/i.test(combinedOutput);
 
     const hasVideoFromText =
-      /Stream\s+#\d+:\d+[^:]*:\s*Video:/i.test(combinedOutput) ||
-      combinedOutput.toLowerCase().includes('video:');
+      /Stream\s+#\d+:\d+[^:]*:\s*Video:/i.test(combinedOutput);
 
     const durationMatch = combinedOutput.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d+)/);
     let duration = 0;
@@ -525,7 +523,9 @@ export class FFmpegService {
     if (!hasVideo) {
       fc.push(`color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(3)}[v${vIdx}]`);
     } else {
-      fc.push(`[${videoIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${vIdx}]`);
+      // (ow-iw)/2 expression'ı kroog-ffmpeg-kit'te "error splitting argument list" yapıyor
+      // Sabit 0 offset kullan — scale zaten aspect ratio'yu koruyor, pad merkeze alır
+      fc.push(`[${videoIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:0:0,setsar=1[v${vIdx}]`);
     }
     vStream = `[v${vIdx}]`;
 
@@ -606,7 +606,9 @@ export class FFmpegService {
     // ── 6. WATERMARK ────────────────────────────────────────────────────────
     if (!isPremium && config.watermark) {
       vIdx++;
-      fc.push(`${vStream}drawtext=text='Made with SlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.6[v${vIdx}]`);
+      // Boşluk içeren text kroog-ffmpeg-kit'te argument split hatasına yol açıyor
+      // Boşluk yerine alt çizgi kullan
+      fc.push(`${vStream}drawtext=text='Made_with_SlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.6[v${vIdx}]`);
       vStream = `[v${vIdx}]`;
     }
 
@@ -653,14 +655,31 @@ export class FFmpegService {
     console.log('[FFmpeg]', filterComplex);
     console.log(`[FFmpeg] vStream final: ${vStream}, aStream final: ${aStream}`);
 
-    // ─── KALAN ARGÜMANLAR ────────────────────────────────────────────────────
-    // ✅ FIX: vStream köşeli parantezlerini güvenli şekilde geç
-    // "[v2]" formatı bazı Android sürümlerinde parse hatasına yol açıyor
-    const vStreamLabel = vStream.replace(/[\[\]]/g, ''); // "v2"
+    // ─── filter_complex SCRIPT DOSYASI ──────────────────────────────────────
+    // KRİTİK: kroog-ffmpeg-kit v6.0.10, -filter_complex argümanındaki
+    // özel karakterleri (parantez, noktalı virgül, eşittir) argument parser'dan
+    // geçirirken "error splitting the argument list" hatası veriyor.
+    // Çözüm: filterComplex'i bir temp dosyaya yaz, -filter_complex_script ile geç.
+    // Bu sayede string hiç parse edilmez, dosyadan direkt okunur.
+    let filterComplexArg: string[];
+    let fcScriptPath: string | null = null;
+    try {
+      const { File } = require('expo-file-system');
+      fcScriptPath = stripFileProtocol(getPath(Paths.cache, `fc_${Date.now()}.txt`));
+      const fcFile = new File(fcScriptPath);
+      fcFile.write(filterComplex);
+      filterComplexArg = ['-filter_complex_script', fcScriptPath];
+      console.log('[FFmpeg] Using filter_complex_script:', fcScriptPath);
+    } catch (e) {
+      // Dosya yazma başarısız olursa direkt string olarak geç (fallback)
+      console.warn('[FFmpeg] filter_complex_script write failed, falling back to inline:', e);
+      filterComplexArg = ['-filter_complex', filterComplex];
+    }
 
+    // ─── KALAN ARGÜMANLAR ────────────────────────────────────────────────────
     args.push(
-      '-filter_complex', filterComplex,
-      '-map', `[${vStreamLabel}]`,
+      ...filterComplexArg,
+      '-map', vStream,
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'fast',
@@ -668,9 +687,6 @@ export class FFmpegService {
       '-c:a', 'aac',
       '-b:a', '128k',
       '-movflags', '+faststart',
-      // NOT: hasAudio=false durumunda -shortest KALDIRILDI.
-      // anullsrc süresi zaten preciseDuration kadar ayarlı.
-      // -shortest + anullsrc kombinasyonu Android'de native crash yapıyor.
       ...(hasAudio ? ['-shortest'] : []),
       '-y',
       rawOutputPath
@@ -698,6 +714,10 @@ export class FFmpegService {
       onProgress?.(1, 'Complete');
       console.log('[FFmpeg] === EXPORT SUCCESS ===');
       console.log(`[FFmpeg] Output: ${rawOutputPath}`);
+      // Temp filter_complex script dosyasını temizle
+      if (fcScriptPath) {
+        try { const { File } = require('expo-file-system'); new File(fcScriptPath).delete(); } catch {}
+      }
       return outputPath;
     } else {
       const sessionLogs = await session.getLogs();
@@ -768,4 +788,4 @@ export class FFmpegService {
   }
 }
 
-export const ffmpegService = FFmpegService.getInstance();
+export const ffmpegService = FFmpegService.getInstance()
