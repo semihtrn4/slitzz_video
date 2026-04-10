@@ -40,6 +40,7 @@ export class FFmpegService {
     const failStack = await session.getFailStackTrace();
     const allLogs = logs.map((l: any) => l.getMessage()).join('\n');
 
+    // Log boşsa global buffer'dan son satırları çek
     // Bu Android'de native crash sonrası "No log" yerine gerçek hatayı gösterir
     if (!allLogs && !failStack) {
       const globalBuf = FFmpegService.lastGlobalLogs.slice(-30).join('\n');
@@ -49,13 +50,7 @@ export class FFmpegService {
       return 'No log output available (Native Crash or Missing Stream)';
     }
 
-    // KRİTİK: Logların BAŞINI değil, SONUNU göster (Hata sonlardadır)
-    const logLines = allLogs.split('\n');
-    const logTail = logLines.length > 40 
-      ? '... (logs truncated) ...\n' + logLines.slice(-40).join('\n')
-      : allLogs;
-
-    return `FFMPEG ERROR (Tail):\n${logTail}\n\nSTACK TRACE:\n${failStack || 'None'}`;
+    return `LOGS:\n${allLogs}\n\nSTACK TRACE:\n${failStack || 'None'}`;
   }
 
   private throwIfNativeUnavailable() {
@@ -434,7 +429,11 @@ export class FFmpegService {
     const hasAudio = info.hasAudio;
     const hasVideo = info.hasVideo;
 
+    console.log('=== [EXPORT START] ===');
     console.log(`[Export] hasAudio: ${hasAudio}, hasVideo: ${hasVideo}, duration: ${info.duration}`);
+    console.log(`[Export] videoPath: ${rawInputPath}`);
+    console.log(`[Export] config: trimStart=${config.trimStart}, trimEnd=${config.trimEnd}, speed=${config.speed}, resolution=${config.resolution}, aspectRatio=${config.aspectRatio}`);
+    console.log(`[Export] musicPath: ${config.musicPath || 'none'}, audioVolume: ${config.audioVolume}, includeSubtitles: ${config.includeSubtitles}`);
 
     const preciseDuration = config.trimEnd
       ? config.trimEnd - (config.trimStart || 0)
@@ -466,7 +465,7 @@ export class FFmpegService {
     // veriyordu (-f lavfi -i anullsrc). Bu Android'de native crash yapıyor.
     // Yeni yaklaşım: anullsrc filter_complex İÇİNDE source node olarak tanımlanır.
 
-    const args: string[] = ['-hide_banner'];
+    const args: string[] = [];
     args.push('-i', rawInputPath);           // Her zaman input[0] = video dosyası
     const videoIdx = 0;                       // Video her zaman input 0
 
@@ -618,8 +617,12 @@ export class FFmpegService {
     // filter_complex: tüm parçaları ; ile birleştir
     const filterComplex = fc.join(';');
 
-    // DEBUG: Filter ve args'ı logla
-    console.log('[FFmpeg] Final filter_complex:', filterComplex);
+    // DEBUG: Her filter adımını ayrı ayrı logla — hangisinde hata var kolayca görülür
+    console.log('[FFmpeg] === FILTER COMPLEX STEPS ===');
+    fc.forEach((step, i) => console.log(`[FFmpeg] fc[${i}]: ${step}`));
+    console.log('[FFmpeg] === FULL filter_complex ===');
+    console.log('[FFmpeg]', filterComplex);
+    console.log(`[FFmpeg] vStream final: ${vStream}, aStream final: ${aStream}`);
 
     // ─── KALAN ARGÜMANLAR ────────────────────────────────────────────────────
     args.push(
@@ -628,7 +631,6 @@ export class FFmpegService {
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'fast',
-      '-pix_fmt', 'yuv420p',       // Sosyal medya ve galeri uyumluluğu için KRİTİK
       '-b:v', is4K ? '10M' : '5M',
       '-c:a', 'aac',
       '-b:a', '128k',
@@ -641,7 +643,8 @@ export class FFmpegService {
       rawOutputPath
     );
 
-    console.log('[FFmpeg] Full args:', JSON.stringify(args, null, 2));
+    console.log('[FFmpeg] === FULL ARGS ===');
+    args.forEach((arg, i) => console.log(`[FFmpeg] args[${i}]: ${arg}`));
 
     // ─── PROGRESS ────────────────────────────────────────────────────────────
     FFmpegKitConfig.enableStatisticsCallback((stats: Statistics) => {
@@ -659,10 +662,27 @@ export class FFmpegService {
 
     if (ReturnCode.isSuccess(returnCode)) {
       onProgress?.(1, 'Complete');
+      console.log('[FFmpeg] === EXPORT SUCCESS ===');
+      console.log(`[FFmpeg] Output: ${rawOutputPath}`);
       return outputPath;
     } else {
+      // Tüm session loglarını tek tek yazdır — asıl hata satırını bul
+      const sessionLogs = await session.getLogs();
+      console.error('[FFmpeg] === EXPORT FAILED ===');
+      console.error(`[FFmpeg] Return code: ${await session.getReturnCode()}`);
+      sessionLogs.forEach((l: any, i: number) => {
+        const msg = l.getMessage();
+        // Sadece hata içeren satırları öne çıkar
+        if (msg.includes('Error') || msg.includes('error') || msg.includes('Invalid') ||
+          msg.includes('No such') || msg.includes('failed') || msg.includes('matches no')) {
+          console.error(`[FFmpeg] !! HATA SATIRI [${i}]: ${msg}`);
+        } else {
+          console.log(`[FFmpeg] log[${i}]: ${msg}`);
+        }
+      });
+      const failStack = await session.getFailStackTrace();
+      if (failStack) console.error('[FFmpeg] STACK TRACE:', failStack);
       const output = await this.getSessionOutput(session);
-      console.error('[FFmpeg] Export FAILED.\nDetails:', output);
       throw new Error(`FFmpeg export failed:\n${output}`);
     }
   }
