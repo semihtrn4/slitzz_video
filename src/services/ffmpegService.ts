@@ -41,13 +41,26 @@ export class FFmpegService {
     const allLogs = logs.map((l: any) => l.getMessage()).join('\n');
 
     // Log boşsa global buffer'dan son satırları çek
-    // Bu Android'de native crash sonrası "No log" yerine gerçek hatayı gösterir
     if (!allLogs && !failStack) {
       const globalBuf = FFmpegService.lastGlobalLogs.slice(-30).join('\n');
       if (globalBuf) {
         return `No session log (Native Crash). Last global logs:\n${globalBuf}`;
       }
       return 'No log output available (Native Crash or Missing Stream)';
+    }
+
+    // Version/config header satırlarını atla, sadece hata satırlarını öne çıkar
+    const errorLines = logs
+      .map((l: any) => l.getMessage() as string)
+      .filter((msg: string) =>
+        msg.includes('Error') || msg.includes('error') ||
+        msg.includes('Invalid') || msg.includes('No such') ||
+        msg.includes('matches no') || msg.includes('failed') ||
+        msg.includes('Unable') || msg.includes('Could not')
+      );
+
+    if (errorLines.length > 0) {
+      return `ERRORS:\n${errorLines.join('\n')}`;
     }
 
     return `LOGS:\n${allLogs}\n\nSTACK TRACE:\n${failStack || 'None'}`;
@@ -551,22 +564,26 @@ export class FFmpegService {
     if (config.srtPath && config.includeSubtitles) {
       try {
         const isAss = config.srtPath.toLowerCase().endsWith('.ass');
-        const rawSubPath = stripFileProtocol(config.srtPath);
+        // stripFileProtocol ile file:// prefix'ini kaldır — File() ve FFmpeg için
+        const rawSubPath = stripFileProtocol(ensureAbsolute(config.srtPath));
         const { File } = require('expo-file-system');
-        const subFile = new File(config.srtPath);
+        // Exists kontrolü rawSubPath ile yap (file:// olmadan)
+        const subFile = new File(rawSubPath);
 
         if (subFile.exists) {
           vIdx++;
           if (isAss) {
             // ASS: her platformda daha güvenli
+            // Android path'lerinde boşluk ve özel karakter escape
             const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
             fc.push(`${vStream}ass='${escaped}'[v${vIdx}]`);
           } else {
             // SRT: force_style ile
-            const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "'\\\\\\''").replace(/:/g, '\\:');
+            const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
             fc.push(`${vStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v${vIdx}]`);
           }
           vStream = `[v${vIdx}]`;
+          console.log(`[FFmpeg] Subtitles added: ${rawSubPath}`);
         } else {
           console.warn('[FFmpeg] Subtitle file not found, skipping:', rawSubPath);
         }
@@ -595,10 +612,11 @@ export class FFmpegService {
       audioFilters.push(`afade=t=out:st=${Math.max(0, estimatedDuration - 1).toFixed(3)}:d=1`);
     }
 
-    fc.push(`${aStream}${audioFilters.join(',')}[a_orig]`);
-
     // ── 8. MÜZİK MİX ───────────────────────────────────────────────────────
     if (config.musicPath && musicInputIdx >= 0 && config.musicVolume !== undefined) {
+      // Müzik var: önce [a_orig] ara node'u oluştur, sonra mix
+      fc.push(`${aStream}${audioFilters.join(',')}[a_orig]`);
+
       const mVol = Math.max(0, Math.min(2, config.musicVolume / 100)).toFixed(4);
       const musicFilters: string[] = [`volume=${mVol}`];
 
@@ -610,8 +628,9 @@ export class FFmpegService {
       fc.push(`[${musicInputIdx}:a]${musicFilters.join(',')}[a_music]`);
       fc.push(`[a_orig][a_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`);
     } else {
-      // Müzik yok: ses akışını direkt çıkışa bağla
-      fc.push(`[a_orig]volume=1.0[outa]`);
+      // Müzik yok: ara node olmadan direkt [outa]'ya bağla
+      // [a_orig] → volume=1.0 → [outa] zinciri Android'de kırılıyordu
+      fc.push(`${aStream}${audioFilters.join(',')}[outa]`);
     }
 
     // filter_complex: tüm parçaları ; ile birleştir
