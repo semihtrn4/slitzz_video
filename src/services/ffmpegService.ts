@@ -1,5 +1,5 @@
 // @ts-ignore
-import { FFmpegKit, ReturnCode, FFmpegKitConfig, Log, Statistics } from 'ffmpeg-kit-react-native';
+import { FFmpegKit, FFprobeKit, ReturnCode, FFmpegKitConfig, Log, Statistics } from 'ffmpeg-kit-react-native';
 import { Directory, Paths } from 'expo-file-system';
 import { silenceService } from './silenceService';
 import { getPath, ensureAbsolute, stripFileProtocol } from '../utils/pathUtils';
@@ -10,9 +10,10 @@ export class FFmpegService {
   private logEnabled: boolean = false;
   private _nativeAvailable: boolean | null = null;
 
-  // FIX: Global log buffer — native crash olduğunda son 50 satırı sakla
+  // Global log buffer — native crash olduğunda son 80 satırı sakla
+  // Session.getLogs() boş dönerse bu buffer'dan asıl hata okunabilir
   static lastGlobalLogs: string[] = [];
-  private static readonly MAX_GLOBAL_LOGS = 50;
+  private static readonly MAX_GLOBAL_LOGS = 80;
 
   static getInstance(): FFmpegService {
     if (!FFmpegService.instance) {
@@ -25,6 +26,7 @@ export class FFmpegService {
   private async isNativeAvailable(): Promise<boolean> {
     if (this._nativeAvailable !== null) return this._nativeAvailable;
     try {
+      // FFmpegKit null ise bu hata fırlatır
       const session = await FFmpegKit.execute('-version');
       this._nativeAvailable = session != null;
     } catch {
@@ -38,9 +40,10 @@ export class FFmpegService {
     const failStack = await session.getFailStackTrace();
     const allLogs = logs.map((l: any) => l.getMessage()).join('\n');
 
-    // FIX: Log boşsa global buffer'dan son satırları çek
+    // Log boşsa global buffer'dan son satırları çek
+    // Bu Android'de native crash sonrası "No log" yerine gerçek hatayı gösterir
     if (!allLogs && !failStack) {
-      const globalBuf = FFmpegService.lastGlobalLogs.slice(-20).join('\n');
+      const globalBuf = FFmpegService.lastGlobalLogs.slice(-30).join('\n');
       if (globalBuf) {
         return `No session log (Native Crash). Last global logs:\n${globalBuf}`;
       }
@@ -66,8 +69,7 @@ export class FFmpegService {
         FFmpegKitConfig.enableLogCallback((log: Log) => {
           const msg = log.getMessage();
           console.log(`[FFmpeg Log] ${msg}`);
-
-          // FIX: Global buffer'a ekle, 50 satırı geçince en eskiyi sil
+          // Global buffer'a ekle — max 80 satır tut
           FFmpegService.lastGlobalLogs.push(msg);
           if (FFmpegService.lastGlobalLogs.length > FFmpegService.MAX_GLOBAL_LOGS) {
             FFmpegService.lastGlobalLogs.shift();
@@ -79,12 +81,187 @@ export class FFmpegService {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // getVideoInfo — 3 aşamalı güvenilir ses/video algılama
+  //
+  // SORUN: Android'de FFmpeg -i komutu stream bilgilerini session log olarak
+  // değil, stderr'e yazıyor. session.getLogs() boş dönebilir. Bu yüzden
+  // "Stream #0:1: Audio: aac" satırı yakalanamaz ve hasAudio=false olur.
+  //
+  // ÇÖZÜM: 3 aşamalı yaklaşım:
+  //   1. FFprobeKit JSON — en kesin, codec_type field'ı parse edilir
+  //   2. FFmpeg -i metin parse — session + global buffer birleştirilir
+  //   3. 1 saniyelik ses çıkarma testi — metin parse yanlış sonuç verirse
+  //      gerçekten ses çıkarmayı dene, başarılıysa hasAudio=true kesin
+  // ─────────────────────────────────────────────────────────────────────────
+  async getVideoInfo(videoPath: string): Promise<{
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    hasAudio: boolean;
+    hasVideo: boolean;
+    rawOutput?: string;
+  }> {
+    await this.ensureLogCallback();
+    const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
+
+    // ── AŞAMA 1: FFprobeKit JSON (varsa — en güvenilir yöntem) ──────────────
+    // FFprobeKit codec_type field'ını JSON olarak döndürür, metin parse gerekmez
+    try {
+      if (typeof FFprobeKit !== 'undefined' && FFprobeKit !== null) {
+        const probeSession = await FFprobeKit.execute(
+          `-v quiet -print_format json -show_streams -show_format "${absVideoPath}"`
+        );
+        const probeLogs = await probeSession.getLogs();
+        const probeOutput = probeLogs.map((l: Log) => l.getMessage()).join('');
+
+        if (probeOutput && probeOutput.includes('"codec_type"')) {
+          console.log('[FFmpeg] Using FFprobeKit JSON output');
+          const parsed = JSON.parse(probeOutput);
+          const streams = parsed.streams || [];
+          const format = parsed.format || {};
+
+          const audioStream = streams.find((s: any) => s.codec_type === 'audio');
+          const videoStream = streams.find((s: any) => s.codec_type === 'video');
+
+          const duration = parseFloat(format.duration || '0') ||
+            parseFloat(videoStream?.duration || '0') ||
+            parseFloat(audioStream?.duration || '0');
+
+          const w = videoStream ? parseInt(videoStream.width || '1080') : 1080;
+          const h = videoStream ? parseInt(videoStream.height || '1920') : 1920;
+
+          const fpsStr = videoStream?.r_frame_rate || '30/1';
+          const fpsParts = fpsStr.split('/');
+          const fps = fpsParts.length === 2
+            ? parseFloat(fpsParts[0]) / parseFloat(fpsParts[1])
+            : parseFloat(fpsStr);
+
+          const hasAudio = !!audioStream;
+          const hasVideo = !!videoStream;
+
+          console.log(`[FFprobeKit] hasAudio: ${hasAudio}, hasVideo: ${hasVideo}, duration: ${duration}`);
+          return { duration, width: w, height: h, fps: fps || 30, hasAudio, hasVideo, rawOutput: probeOutput };
+        }
+      }
+    } catch (probeErr) {
+      console.warn('[FFmpeg] FFprobeKit failed or unavailable, falling back to FFmpeg -i:', probeErr);
+    }
+
+    // ── AŞAMA 2: FFmpeg -i metin parse ──────────────────────────────────────
+    // KRİTİK: Android'de session logları bazen boş gelir.
+    // Çözüm: global buffer'ı temizle, -i çalıştır, hem session hem global'den birleştir.
+    FFmpegService.lastGlobalLogs = [];
+
+    const infoSession = await FFmpegKit.executeWithArguments(['-hide_banner', '-i', absVideoPath]);
+    const infoLogs = await infoSession.getLogs();
+    let infoOutput = infoLogs.map((l: Log) => l.getMessage()).join('\n');
+
+    // Session boşsa global buffer'dan al (Android'de sık yaşanır)
+    if (!infoOutput || infoOutput.trim().length < 20) {
+      infoOutput = FFmpegService.lastGlobalLogs.join('\n');
+      console.warn('[FFmpeg] Session logs empty, fallback to global buffer. Chars:', infoOutput.length);
+    }
+
+    // Her ikisini birleştir (bazı cihazlarda ikisi de kısmi olabilir)
+    const combinedOutput = infoOutput + '\n' + FFmpegService.lastGlobalLogs.join('\n');
+    console.log('[FFmpeg] probe combined output (800 chars):', combinedOutput.substring(0, 800));
+
+    // Ses/video stream varlığını regex ile kontrol et
+    // "Stream #0:1(und): Audio: aac" formatını ve basit "audio:" formatını yakala
+    let hasAudioFromText =
+      /Stream\s+#\d+:\d+[^:]*:\s*Audio:/i.test(combinedOutput) ||
+      combinedOutput.toLowerCase().includes('audio:');
+
+    const hasVideoFromText =
+      /Stream\s+#\d+:\d+[^:]*:\s*Video:/i.test(combinedOutput) ||
+      combinedOutput.toLowerCase().includes('video:');
+
+    // Duration — "Duration: 00:01:02.03" formatını parse et
+    const durationMatch = combinedOutput.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d+)/);
+    let duration = 0;
+    if (durationMatch) {
+      duration =
+        parseInt(durationMatch[1]) * 3600 +
+        parseInt(durationMatch[2]) * 60 +
+        parseInt(durationMatch[3]) +
+        parseInt(durationMatch[4]) / Math.pow(10, durationMatch[4].length);
+    }
+
+    // Çözünürlük — "1080x1920" formatını yakala
+    const resMatch = combinedOutput.match(/(\d{2,5})x(\d{2,5})/);
+    const w = resMatch ? parseInt(resMatch[1]) : 1080;
+    const h = resMatch ? parseInt(resMatch[2]) : 1920;
+
+    // FPS — "30 fps" veya "29.97 fps" formatını yakala
+    const fpsMatch = combinedOutput.match(/(\d+(?:\.\d+)?)\s*fps/);
+    const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
+
+    console.log(`[FFmpeg -i] hasAudio (text): ${hasAudioFromText}, hasVideo: ${hasVideoFromText}`);
+
+    // ── AŞAMA 3: Ses algılanamadıysa 1 saniyelik extract testi ──────────────
+    // Android'de log kesilebilir ve metin parse yanlış sonuç verebilir.
+    // Gerçekten 1s ses çıkarmayı dene: başarılıysa ses KESİNLİKLE var.
+    // Başarısızsa metin parse sonucunu koru (false negative tercih edilir).
+    if (!hasAudioFromText) {
+      console.log('[FFmpeg] Audio not detected in text, running 1s extract test...');
+      try {
+        const testPath = getPath(Paths.cache, `audio_test_${Date.now()}.m4a`);
+        const rawTestPath = stripFileProtocol(testPath);
+
+        const testSession = await FFmpegKit.executeWithArguments([
+          '-i', absVideoPath,
+          '-vn',        // video alma, sadece ses
+          '-t', '1',    // sadece ilk 1 saniye
+          '-c:a', 'aac',
+          '-y', rawTestPath
+        ]);
+
+        const testCode = await testSession.getReturnCode();
+
+        if (ReturnCode.isSuccess(testCode)) {
+          // Dosya oluştu, boyutunu kontrol et (> 100 byte = gerçek ses verisi var)
+          try {
+            const { File } = require('expo-file-system');
+            const testFile = new File(testPath);
+            if (testFile.exists && testFile.size > 100) {
+              console.log('[FFmpeg] 1s extract test PASSED — hasAudio=true (overriding text parse)');
+              hasAudioFromText = true;
+            } else {
+              console.log('[FFmpeg] 1s extract test: file too small, hasAudio=false');
+            }
+          } catch {
+            // size check başarısızsa, komut başarılı olduğu için true say
+            console.log('[FFmpeg] 1s extract test PASSED (size check skipped) — hasAudio=true');
+            hasAudioFromText = true;
+          }
+        } else {
+          console.log('[FFmpeg] 1s extract test FAILED — hasAudio=false confirmed');
+        }
+      } catch (testErr) {
+        console.warn('[FFmpeg] Audio extract test error (non-fatal):', testErr);
+      }
+    }
+
+    return {
+      duration,
+      width: w,
+      height: h,
+      fps,
+      hasAudio: hasAudioFromText,
+      hasVideo: hasVideoFromText,
+      rawOutput: combinedOutput,
+    };
+  }
+
   async extractAudio(videoPath: string, forWhisper: boolean = false): Promise<string> {
     await this.ensureLogCallback();
     const ext = forWhisper ? 'wav' : 'm4a';
     const audioPath = getPath(Paths.cache, `extracted_audio_${Date.now()}.${ext}`);
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
+    // Dosya varlığını kontrol et
     try {
       const { File } = require('expo-file-system');
       const videoFile = new File(videoPath);
@@ -99,8 +276,10 @@ export class FFmpegService {
 
     let args: string[] = [];
     if (forWhisper) {
+      // Whisper: 16kHz mono PCM WAV
       args = ['-i', absVideoPath, '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-y', rawAudioPath];
     } else {
+      // Silence detection: AAC M4A
       args = ['-i', absVideoPath, '-vn', '-c:a', 'aac', '-q:a', '2', '-y', rawAudioPath];
     }
 
@@ -108,6 +287,8 @@ export class FFmpegService {
     const returnCode = await session.getReturnCode();
 
     if (ReturnCode.isSuccess(returnCode)) {
+      // forWhisper ise ham path döndür (whisper native modül bunu bekler)
+      // normal ise file:// prefix'li döndür (expo-av için)
       return forWhisper ? rawAudioPath : audioPath;
     } else {
       const output = await this.getSessionOutput(session);
@@ -248,7 +429,7 @@ export class FFmpegService {
     const hasAudio = info.hasAudio;
     const hasVideo = info.hasVideo;
 
-    console.log(`[FFmpeg] hasAudio: ${hasAudio}, hasVideo: ${hasVideo}, duration: ${info.duration}`);
+    console.log(`[Export] hasAudio: ${hasAudio}, hasVideo: ${hasVideo}, duration: ${info.duration}`);
 
     const preciseDuration = config.trimEnd
       ? config.trimEnd - (config.trimStart || 0)
@@ -271,100 +452,134 @@ export class FFmpegService {
     const width = is4K ? baseWidth * 2 : baseWidth;
     const height = is4K ? baseHeight * 2 : baseHeight;
 
+    // ─── INPUT INDEX PLANI ───────────────────────────────────────────────────
+    // Ses YOK → input[0]=video, ses filter_complex içinde anullsrc ile üretilir
+    // Ses VAR → input[0]=video (ses de burada)
+    // Müzik VAR → input[1]
+    //
+    // NOT: Eski kod 'hasAudio=false' durumunda anullsrc'yi ayrı input olarak
+    // veriyordu (-f lavfi -i anullsrc). Bu Android'de native crash yapıyor.
+    // Yeni yaklaşım: anullsrc filter_complex İÇİNDE source node olarak tanımlanır.
+
     const args: string[] = [];
-
-    if (!hasAudio) {
-      const nullDur = preciseDuration / (config.speed || 1);
-      const safeNullDur = Math.max(nullDur, 1).toFixed(3);
-      args.push('-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=44100:d=${safeNullDur}`);
-    }
-
-    args.push('-i', rawInputPath);
-
-    const videoInputIdx = hasAudio ? 0 : 1;
-    const audioInputIdx = 0;
+    args.push('-i', rawInputPath);           // Her zaman input[0] = video dosyası
+    const videoIdx = 0;                       // Video her zaman input 0
 
     let musicInputIdx = -1;
     if (config.musicPath) {
       const absMusicPath = stripFileProtocol(ensureAbsolute(config.musicPath));
       args.push('-stream_loop', '-1', '-i', absMusicPath);
-      musicInputIdx = hasAudio ? 1 : 2;
+      musicInputIdx = 1;                      // Müzik her zaman input 1 (varsa)
     }
+
+    // ─── FILTER COMPLEX ──────────────────────────────────────────────────────
+    // KURAL: fc dizisindeki her eleman noktalı virgül ile join edilir.
+    // vStream ve aStream değişkenleri aktif stream etiketlerini tutar.
+    // vIdx/aIdx her filtre adımında artırılır — isim çakışması olmaz.
 
     const fc: string[] = [];
-    let videoStream = '';
-    let audioStream = '';
+    let vStream = '';   // aktif video stream etiketi, örn: [v0], [v1]...
+    let aStream = '';   // aktif audio stream etiketi, örn: [a0], [a1]...
+    let vIdx = 0;       // video filtre sayacı
+    let aIdx = 0;       // audio filtre sayacı
 
+    // ── 1. VİDEO KAYNAĞI ────────────────────────────────────────────────────
     if (!hasVideo) {
-      fc.push(`color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(3)}[v0]`);
-      videoStream = '[v0]';
+      // Video stream yoksa siyah ekran üret
+      fc.push(`color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(3)}[v${vIdx}]`);
     } else {
-      fc.push(`[${videoInputIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v0]`);
-      videoStream = '[v0]';
+      // Video var: ölçekle, padding ekle, SAR düzelt
+      fc.push(`[${videoIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${vIdx}]`);
     }
+    vStream = `[v${vIdx}]`;
 
+    // ── 2. SES KAYNAĞI ──────────────────────────────────────────────────────
+    // KRİTİK: Ses yoksa anullsrc'yi filter_complex IÇINDE tanımla.
+    // '-f lavfi -i anullsrc' input olarak vermek Android'de native crash yapıyor.
+    // filter_complex içindeki anullsrc source node tamamen güvenli.
     if (hasAudio) {
-      fc.push(`[${videoInputIdx}:a]asetpts=PTS-STARTPTS[a0]`);
+      // Gerçek ses: video input'unun audio stream'ini al, timestamp sıfırla
+      fc.push(`[${videoIdx}:a]asetpts=PTS-STARTPTS[a${aIdx}]`);
     } else {
-      fc.push(`[0:a]aresample=44100[a0]`);
+      // Sahte ses: filter_complex içinde anullsrc source node
+      const nullDur = Math.max(estimatedDuration, 1).toFixed(3);
+      fc.push(`anullsrc=channel_layout=stereo:sample_rate=44100:d=${nullDur}[a${aIdx}]`);
     }
-    audioStream = '[a0]';
+    aStream = `[a${aIdx}]`;
 
+    // ── 3. TRIM ─────────────────────────────────────────────────────────────
     if (config.trimStart !== undefined || config.trimEnd !== undefined) {
       const start = (config.trimStart || 0).toFixed(3);
       const end = (config.trimEnd || 999999).toFixed(3);
-      fc.push(`${videoStream}trim=start=${start}:end=${end},setpts=PTS-STARTPTS[v1]`);
-      videoStream = '[v1]';
-      fc.push(`${audioStream}atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[a1]`);
-      audioStream = '[a1]';
+
+      vIdx++;
+      fc.push(`${vStream}trim=start=${start}:end=${end},setpts=PTS-STARTPTS[v${vIdx}]`);
+      vStream = `[v${vIdx}]`;
+
+      // anullsrc için atrim gereksiz (d= ile süresi zaten ayarlandı)
+      // ama gerçek ses için gerekli
+      if (hasAudio) {
+        aIdx++;
+        fc.push(`${aStream}atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[a${aIdx}]`);
+        aStream = `[a${aIdx}]`;
+      }
     }
 
+    // ── 4. SPEED ────────────────────────────────────────────────────────────
     if (config.speed && config.speed !== 1) {
-      fc.push(`${videoStream}setpts=${(1 / config.speed).toFixed(6)}*PTS[v2]`);
-      videoStream = '[v2]';
+      vIdx++;
+      fc.push(`${vStream}setpts=${(1 / config.speed).toFixed(6)}*PTS[v${vIdx}]`);
+      vStream = `[v${vIdx}]`;
 
+      // atempo max 2.0, min 0.5 — zincir olarak uygula
       let s = config.speed;
       const atempoFilters: string[] = [];
       while (s > 2.0) { atempoFilters.push('atempo=2.0'); s /= 2.0; }
       while (s < 0.5) { atempoFilters.push('atempo=0.5'); s *= 2.0; }
       atempoFilters.push(`atempo=${s.toFixed(6)}`);
 
-      if (atempoFilters.length > 0) {
-        fc.push(`${audioStream}${atempoFilters.join(',')}[a2]`);
-        audioStream = '[a2]';
-      }
+      aIdx++;
+      fc.push(`${aStream}${atempoFilters.join(',')}[a${aIdx}]`);
+      aStream = `[a${aIdx}]`;
     }
 
+    // ── 5. SUBTITLES ────────────────────────────────────────────────────────
     if (config.srtPath && config.includeSubtitles) {
       try {
         const isAss = config.srtPath.toLowerCase().endsWith('.ass');
         const rawSubPath = stripFileProtocol(config.srtPath);
-
         const { File } = require('expo-file-system');
         const subFile = new File(config.srtPath);
 
         if (subFile.exists) {
+          vIdx++;
           if (isAss) {
+            // ASS: her platformda daha güvenli
             const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-            fc.push(`${videoStream}ass='${escaped}'[v3]`);
+            fc.push(`${vStream}ass='${escaped}'[v${vIdx}]`);
           } else {
+            // SRT: force_style ile
             const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "'\\\\\\''").replace(/:/g, '\\:');
-            fc.push(`${videoStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v3]`);
+            fc.push(`${vStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v${vIdx}]`);
           }
-          videoStream = '[v3]';
+          vStream = `[v${vIdx}]`;
         } else {
           console.warn('[FFmpeg] Subtitle file not found, skipping:', rawSubPath);
         }
       } catch (e) {
+        // Subtitles eklenemezse sessizce devam et — videoyu mahvetme
         console.warn('[FFmpeg] Subtitles filter failed, skipping:', e);
       }
     }
 
+    // ── 6. WATERMARK ────────────────────────────────────────────────────────
     if (!isPremium && config.watermark) {
-      fc.push(`${videoStream}drawtext=text='Made with SlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.6[v4]`);
-      videoStream = '[v4]';
+      vIdx++;
+      fc.push(`${vStream}drawtext=text='Made with SlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.6[v${vIdx}]`);
+      vStream = `[v${vIdx}]`;
     }
 
+    // ── 7. SES VOLUME + FADE ────────────────────────────────────────────────
     const volVal = Math.max(0, Math.min(2, (config.audioVolume ?? 100) / 100));
     const finalVol = volVal.toFixed(4);
     const audioFilters: string[] = [`volume=${finalVol}`];
@@ -376,8 +591,9 @@ export class FFmpegService {
       audioFilters.push(`afade=t=out:st=${Math.max(0, estimatedDuration - 1).toFixed(3)}:d=1`);
     }
 
-    fc.push(`${audioStream}${audioFilters.join(',')}[a_orig]`);
+    fc.push(`${aStream}${audioFilters.join(',')}[a_orig]`);
 
+    // ── 8. MÜZİK MİX ───────────────────────────────────────────────────────
     if (config.musicPath && musicInputIdx >= 0 && config.musicVolume !== undefined) {
       const mVol = Math.max(0, Math.min(2, config.musicVolume / 100)).toFixed(4);
       const musicFilters: string[] = [`volume=${mVol}`];
@@ -390,29 +606,38 @@ export class FFmpegService {
       fc.push(`[${musicInputIdx}:a]${musicFilters.join(',')}[a_music]`);
       fc.push(`[a_orig][a_music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]`);
     } else {
+      // Müzik yok: ses akışını direkt çıkışa bağla
       fc.push(`[a_orig]volume=1.0[outa]`);
     }
 
+    // filter_complex: tüm parçaları ; ile birleştir
     const filterComplex = fc.join(';');
+
+    // DEBUG: Filter ve args'ı logla
     console.log('[FFmpeg] Final filter_complex:', filterComplex);
 
+    // ─── KALAN ARGÜMANLAR ────────────────────────────────────────────────────
     args.push(
       '-filter_complex', filterComplex,
-      '-map', videoStream,
+      '-map', vStream,
       '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'fast',
       '-b:v', is4K ? '10M' : '5M',
       '-c:a', 'aac',
       '-b:a', '128k',
-      '-movflags', '+faststart',
-      '-shortest',
+      '-movflags', '+faststart',   // MP4 header'ı başa al — galeri oynatıcılar için kritik
+      // NOT: hasAudio=false durumunda -shortest KALDIRILDI.
+      // anullsrc süresi zaten preciseDuration kadar ayarlı.
+      // -shortest + anullsrc kombinasyonu Android'de native crash yapıyor.
+      ...(hasAudio ? ['-shortest'] : []),
       '-y',
       rawOutputPath
     );
 
-    console.log('[FFmpeg] Args:', JSON.stringify(args, null, 2));
+    console.log('[FFmpeg] Full args:', JSON.stringify(args, null, 2));
 
+    // ─── PROGRESS ────────────────────────────────────────────────────────────
     FFmpegKitConfig.enableStatisticsCallback((stats: Statistics) => {
       const timeMs = stats.getTime();
       if (timeMs > 0 && estimatedDuration > 0) {
@@ -468,75 +693,6 @@ export class FFmpegService {
           ? "Expo Go desteklenmiyor. 'npx expo run:ios' veya 'npx expo run:android' ile native build yapın."
           : err.message
       };
-    }
-  }
-
-  async getVideoInfo(videoPath: string): Promise<{
-    duration: number;
-    width: number;
-    height: number;
-    fps: number;
-    hasAudio: boolean;
-    hasVideo: boolean;
-    rawOutput?: string;
-  }> {
-    await this.ensureLogCallback();
-    try {
-      const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
-
-      // FIX: -i ile birlikte -f null - kullan, yoksa bazı platformlarda
-      // log satırları session'a düşmeden önce session kapanabiliyor.
-      // Ayrıca global buffer'ı temizle ki bu probe'a ait logları yakalayalım
-      FFmpegService.lastGlobalLogs = [];
-
-      const session = await FFmpegKit.executeWithArguments([
-        '-i', absVideoPath,
-        '-hide_banner',
-      ]);
-
-      const logs = await session.getLogs();
-      let output = logs.map((l: Log) => l.getMessage()).join('\n');
-
-      // FIX: Session log boşsa global buffer'dan al
-      if (!output || output.trim().length === 0) {
-        output = FFmpegService.lastGlobalLogs.join('\n');
-        console.warn('[FFmpeg] getVideoInfo: session logs empty, using global buffer. Lines:', FFmpegService.lastGlobalLogs.length);
-      }
-
-      console.log('[FFmpeg] getVideoInfo raw output (first 500 chars):', output.substring(0, 500));
-
-      // FIX: Büyük/küçük harf farkı olmadan, "Stream #x:y: Audio:" formatını da yakala
-      // Eski: output.toLowerCase().includes('audio:')  ← "audio:" yerine "Audio: aac" gibi gelebilir
-      // Yeni: Stream satırını regex ile ara — bu FFmpeg'in kesin çıktı formatıdır
-      const hasAudio = /Stream\s+#\d+:\d+.*?:\s*Audio:/i.test(output) ||
-        output.toLowerCase().includes('audio:');
-
-      const hasVideo = /Stream\s+#\d+:\d+.*?:\s*Video:/i.test(output) ||
-        output.toLowerCase().includes('video:');
-
-      console.log(`[FFmpeg] getVideoInfo — hasAudio: ${hasAudio}, hasVideo: ${hasVideo}`);
-
-      const durationMatch = output.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d+)/);
-      let duration = 0;
-      if (durationMatch) {
-        duration =
-          parseInt(durationMatch[1]) * 3600 +
-          parseInt(durationMatch[2]) * 60 +
-          parseInt(durationMatch[3]) +
-          parseInt(durationMatch[4]) / Math.pow(10, durationMatch[4].length);
-      }
-
-      const resMatch = output.match(/(\d{2,5})x(\d{2,5})/);
-      const w = resMatch ? parseInt(resMatch[1]) : 1080;
-      const h = resMatch ? parseInt(resMatch[2]) : 1920;
-
-      const fpsMatch = output.match(/(\d+(?:\.\d+)?)\s*fps/);
-      const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
-
-      return { duration, width: w, height: h, fps, hasAudio, hasVideo, rawOutput: output };
-    } catch (err) {
-      console.error('[FFmpeg] getVideoInfo failed for path:', videoPath, err);
-      throw new Error(`Cannot read video info (PROBE FAILED).\nPath: ${videoPath}\nError: ${err}`);
     }
   }
 

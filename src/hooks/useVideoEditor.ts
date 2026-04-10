@@ -125,26 +125,37 @@ export function useVideoEditor(project: Project) {
       const videoPath = project.processedVideoPath || project.originalVideoPath;
       setProcessingStep('probing-video');
 
-      // FIX: hasAudio=false durumunda raw probe çıktısını da hata mesajına ekle
       let hasAudio = true;
       let probeRawOutput = '';
+
       try {
         const info = await ffmpegService.getVideoInfo(videoPath);
         hasAudio = info.hasAudio;
         probeRawOutput = info.rawOutput || '';
-        console.log('[Transcribe] Probe result — hasAudio:', hasAudio, 'rawOutput (200 chars):', probeRawOutput.substring(0, 200));
+        console.log('[Transcribe] Probe — hasAudio:', hasAudio);
+        console.log('[Transcribe] Probe raw (300 chars):', probeRawOutput.substring(0, 300));
       } catch (e) {
+        // Probe başarısız olursa devam et, ses varsayılsın
         console.warn('[Transcribe] getVideoInfo failed, assuming hasAudio=true:', e);
       }
 
       if (!hasAudio) {
-        // FIX: Global buffer'dan son logları da ekle — "No log" sorununu aşmak için
-        const globalLogs = FFmpegService.lastGlobalLogs.slice(-10).join('\n');
-        const detail = probeRawOutput
-          ? `Probe çıktısı:\n${probeRawOutput.substring(0, 300)}`
-          : `Global logs:\n${globalLogs || 'Boş'}`;
+        // Probe çıktısının en bilgi dolu kısmını bul (Stream satırlarını içeren bölge)
+        const streamSection = (() => {
+          const lines = probeRawOutput.split('\n');
+          const streamLineIdx = lines.findIndex(l => /Stream\s+#/i.test(l) || /Duration:/i.test(l));
+          if (streamLineIdx >= 0) {
+            return lines.slice(Math.max(0, streamLineIdx - 1), streamLineIdx + 8).join('\n');
+          }
+          return probeRawOutput.substring(0, 400);
+        })();
+
+        const globalLogs = FFmpegService.lastGlobalLogs.slice(-8).join('\n');
+        const detail = streamSection || globalLogs || 'Probe çıktısı alınamadı';
+
+        console.error('[Transcribe] hasAudio=false. Detail:\n', detail);
         toast.show(
-          `Bu videoda transkribe edilecek ses bulunamadı.\n${detail}`,
+          `Ses bulunamadı. Probe:\n${detail.substring(0, 300)}`,
           'error'
         );
         return;
@@ -192,8 +203,7 @@ export function useVideoEditor(project: Project) {
       } else if (msg.includes('getLogLevel') || msg.includes('FFmpeg')) {
         toast.show('FFmpeg native modülü hazır değil. Native build gerekli (expo run:ios/android).', 'error');
       } else {
-        const fullMsg = (error as any)?.message || String(error);
-        toast.show(`Transcribe hatası: ${fullMsg.substring(0, 150)}...`, 'error');
+        toast.show(`Transcribe hatası: ${msg.substring(0, 200)}`, 'error');
       }
     } finally {
       setProcessing(false);
@@ -207,6 +217,7 @@ export function useVideoEditor(project: Project) {
     setProcessingStep('encoding');
     setProcessingProgress(0);
 
+    // Relative path'li background music FFmpeg'i crash yapar
     let config: ExportConfig = (inputConfig.musicPath && !inputConfig.musicPath.startsWith('/'))
       ? { ...inputConfig, musicPath: undefined, musicVolume: undefined }
       : { ...inputConfig };
@@ -218,7 +229,6 @@ export function useVideoEditor(project: Project) {
           setProcessingStep('generating-subtitles');
 
           let adjustedSegments = subtitleSegments;
-
           if (config.trimStart && config.trimStart > 0) {
             adjustedSegments = adjustedSegments
               .filter((seg) => seg.end > config.trimStart!)
@@ -280,8 +290,8 @@ export function useVideoEditor(project: Project) {
       if (error?.message === 'FREE_PLAN_DURATION_EXCEEDED') {
         router.push('/paywall');
       } else {
-        const fullMsg = (error as any)?.message || String(error);
-        toast.show(`Export failed: ${fullMsg.substring(0, 300)}...`, 'error');
+        const fullMsg = error?.message || String(error);
+        toast.show(`Export failed: ${fullMsg.substring(0, 300)}`, 'error');
       }
       return null;
     } finally {
