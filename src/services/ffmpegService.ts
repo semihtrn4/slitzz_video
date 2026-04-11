@@ -393,7 +393,6 @@ export class FFmpegService {
         '-map', '[vout]',
         '-map', '[aout]',
         '-c:v', 'libx264',
-        '-preset', 'superfast',
         '-c:a', 'aac',
         '-y', rawOutputPath
       ]);
@@ -414,7 +413,6 @@ export class FFmpegService {
         '-filter_complex', filter,
         '-map', '[vout]',
         '-c:v', 'libx264',
-        '-preset', 'superfast',
         '-an',
         '-y', rawOutputPath
       ]);
@@ -578,50 +576,42 @@ export class FFmpegService {
       aStream = `[a${aIdx}]`;
     }
 
-    // ── 5. SUBTITLES ────────────────────────────────────────────────────────
+    // ── 5. SUBTITLES (DRAWTEXT FALLBACK) ───────────────────────────────────
     if (config.srtPath && config.includeSubtitles) {
       try {
-        const isAss = config.srtPath.toLowerCase().endsWith('.ass');
-        // stripFileProtocol ile file:// prefix'ini kaldır
-        const rawSubPath = stripFileProtocol(ensureAbsolute(config.srtPath));
+        const absSubPath = stripFileProtocol(ensureAbsolute(config.srtPath));
         const { File } = require('expo-file-system');
-        const uriForCheck = rawSubPath.startsWith('/') ? `file://${rawSubPath}` : `file:///${rawSubPath}`;
+        const uriForCheck = `file://${absSubPath}`;
         const subFile = new File(uriForCheck);
 
         if (subFile.exists) {
-          vIdx++;
-          let subPathToUse = rawSubPath;
+          const content = subFile.text() as string;
+          // ASS içeriğini drawtext komutlarına çevir (libass bağımlılığını bitirir)
+          const subLines = this.parseAssToDrawtext(content);
 
-          // SRT ise önce ASS'e çevir çünkü ass filtresi sadece .ass dosyalarını kabul eder.
-          // Bu işlem milisaniyeler sürer ve hata riskini %100 önler.
-          if (!isAss) {
-            try {
-              const assPath = stripFileProtocol(getPath(Paths.cache, `sub_${Date.now()}.ass`));
-              // ✅ FIX: SRT -> ASS Ön-Dönüştürme
-              const convertSession = await FFmpegKit.executeWithArguments(['-i', rawSubPath, '-y', assPath]);
-              const convertCode = await convertSession.getReturnCode();
-              if (ReturnCode.isSuccess(convertCode)) {
-                subPathToUse = assPath;
-                console.log(`[FFmpeg] SRT converted to ASS for stability: ${subPathToUse}`);
-              }
-            } catch (convErr) {
-              console.warn('[FFmpeg] SRT conversion failed, attempting direct burn:', convErr);
-            }
+          if (subLines.length > 0) {
+            vIdx++;
+            // Tüm satırları tek bir drawtext zinciri olarak birleştir
+            const drawtextFilters = subLines
+              .map(l => {
+                const safeText = l.text
+                  .replace(/'/g, '')      // tek tırnak FFmpeg'i bozar
+                  .replace(/,/g, '\\,')   // virgül filtre ayırıcıdır, kaçırılmalı
+                  .replace(/:/g, '\\:');  // iki nokta opsiyon ayırıcıdır, kaçırılmalı
+                
+                return `drawtext=text='${safeText}':x=(w-text_w)/2:y=h-th-100` +
+                       `:fontsize=42:fontcolor=white:borderw=3:bordercolor=black` +
+                       `:enable='between(t\\,${l.start.toFixed(3)}\\,${l.end.toFixed(3)})'`;
+              })
+              .join(',');
+
+            fc.push(`${vStream}${drawtextFilters}[v${vIdx}]`);
+            vStream = `[v${vIdx}]`;
+            console.log(`[FFmpeg] Subtitles applied via drawtext: ${subLines.length} lines`);
           }
-
-          const escaped = subPathToUse.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-          
-          // Reverted to 'ass' filter because 'subtitles' filter was missing in this build.
-          // Now using pre-converted .ass file for maximum stability.
-          fc.push(`${vStream}ass=filename='${escaped}'[v${vIdx}]`);
-
-          vStream = `[v${vIdx}]`;
-          console.log(`[FFmpeg] Subtitles added: ${subPathToUse}`);
-        } else {
-          console.warn('[FFmpeg] Subtitle file not found, skipping:', rawSubPath);
         }
       } catch (e) {
-        console.warn('[FFmpeg] Subtitles filter failed, skipping:', e);
+        console.warn('[FFmpeg] Drawtext subtitles failed, skipping:', e);
       }
     }
 
@@ -809,6 +799,32 @@ export class FFmpegService {
     } catch (err) {
       console.warn('[FFmpeg] Cache clear failed', err);
     }
+  }
+
+  private parseAssToDrawtext(assContent: string): { start: number; end: number; text: string }[] {
+    const results: { start: number; end: number; text: string }[] = [];
+    const lines = assContent.split('\n');
+
+    for (const line of lines) {
+      // Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Merhaba
+      const match = line.match(
+        /^Dialogue:\s*\d+,(\d+):(\d{2}):(\d{2})\.(\d{2}),(\d+):(\d{2}):(\d{2})\.(\d{2}),.*?,,.*?,,(.+)$/
+      );
+      if (!match) continue;
+
+      const toSec = (h: string, m: string, s: string, cs: string) =>
+        parseInt(h) * 3600 + parseInt(m) * 60 + parseInt(s) + parseInt(cs) / 100;
+
+      const start = toSec(match[1], match[2], match[3], match[4]);
+      const end = toSec(match[5], match[6], match[7], match[8]);
+
+      // ASS taglerini temizle: {\an8} gibi ve satır sonlarını (\N) boşluğa çevir
+      const text = match[9].replace(/\{[^}]*\}/g, '').replace(/\\N/g, ' ').trim();
+
+      if (text) results.push({ start, end, text });
+    }
+
+    return results;
   }
 }
 
