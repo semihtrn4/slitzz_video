@@ -28,7 +28,7 @@ export class TranscriptionService {
   async isModelDownloaded(): Promise<boolean> {
     try {
       const path = this.getModelPath(); // file:// URI
-      const info = await FileSystem.getInfoAsync(path, { size: true });
+      const info = await FileSystem.getInfoAsync(path, { size: true } as any);
       return info.exists && (info as any).size > 50_000_000;
     } catch {
       return false;
@@ -88,7 +88,7 @@ export class TranscriptionService {
         }
 
         // Boyut doğrulama
-        const info = await FileSystem.getInfoAsync(modelPath, { size: true });
+        const info = await FileSystem.getInfoAsync(modelPath, { size: true } as any);
         console.log('[Whisper] Downloaded size:', (info as any).size);
 
         if (!info.exists || (info as any).size < 50_000_000) {
@@ -154,7 +154,7 @@ export class TranscriptionService {
 
     // Dosya varlığını kontrol et
     try {
-      const audioInfo = await FileSystem.getInfoAsync(fileUri, { size: true });
+      const audioInfo = await FileSystem.getInfoAsync(fileUri, { size: true } as any);
       if (!audioInfo.exists) {
         throw new Error(`Audio file not found at URI: ${fileUri}`);
       }
@@ -215,14 +215,13 @@ export class TranscriptionService {
 
   async generateSRT(segments: SubtitleSegment[]): Promise<string> {
     const tempDir = getPath(Paths.cache, 'temp/');
-    const dir = new Directory(tempDir);
-    if (!dir.exists) {
-      dir.create({ intermediates: true });
+    const dirInfo = await FileSystem.getInfoAsync(tempDir);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true });
     }
     const srtPath = getPath(tempDir, `subtitles_${Date.now()}.srt`);
     const srtContent = buildSRTContent(segments);
-    const srtFile = new File(srtPath);
-    srtFile.write(srtContent);
+    await FileSystem.writeAsStringAsync(srtPath, srtContent, { encoding: FileSystem.EncodingType.UTF8 });
     return srtPath;
   }
 
@@ -315,8 +314,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       events += `Dialogue: 0,${formatTime(seg.start)},${formatTime(seg.end)},Default,,0,0,0,,${seg.text}\n`;
     });
 
-    const assFile = new File(assPath);
-    assFile.write(assHeader + events);
+    await FileSystem.writeAsStringAsync(assPath, assHeader + events, { encoding: FileSystem.EncodingType.UTF8 });
     return assPath;
   }
 }
