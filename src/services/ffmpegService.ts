@@ -592,10 +592,11 @@ export class FFmpegService {
           vIdx++;
           if (isAss) {
             const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-            fc.push(`${vStream}ass='${escaped}'[v${vIdx}]`);
+            // Explicit filename= use to avoid "No option name near" error on Android
+            fc.push(`${vStream}subtitles=filename='${escaped}'[v${vIdx}]`);
           } else {
             const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-            fc.push(`${vStream}subtitles='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v${vIdx}]`);
+            fc.push(`${vStream}subtitles=filename='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v${vIdx}]`);
           }
           vStream = `[v${vIdx}]`;
           console.log(`[FFmpeg] Subtitles added: ${rawSubPath}`);
