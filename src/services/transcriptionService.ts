@@ -215,13 +215,14 @@ export class TranscriptionService {
 
   async generateSRT(segments: SubtitleSegment[]): Promise<string> {
     const tempDir = getPath(Paths.cache, 'temp/');
-    const dirInfo = await FileSystem.getInfoAsync(tempDir);
-    if (!dirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true });
+    const dir = new Directory(tempDir);
+    if (!dir.exists) {
+      dir.create({ intermediates: true });
     }
     const srtPath = getPath(tempDir, `subtitles_${Date.now()}.srt`);
     const srtContent = buildSRTContent(segments);
-    await FileSystem.writeAsStringAsync(srtPath, srtContent, { encoding: FileSystem.EncodingType.UTF8 });
+    const srtFile = new File(srtPath);
+    srtFile.write(srtContent);
     return srtPath;
   }
 
@@ -314,7 +315,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       events += `Dialogue: 0,${formatTime(seg.start)},${formatTime(seg.end)},Default,,0,0,0,,${seg.text}\n`;
     });
 
-    await FileSystem.writeAsStringAsync(assPath, assHeader + events, { encoding: FileSystem.EncodingType.UTF8 });
+    const assFile = new File(assPath);
+    assFile.write(assHeader + events);
     return assPath;
   }
 }

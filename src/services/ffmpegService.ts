@@ -230,9 +230,9 @@ export class FFmpegService {
 
         if (ReturnCode.isSuccess(testCode)) {
           try {
-            const FileSystem = require('expo-file-system');
-            const testFileInfo = await FileSystem.getInfoAsync(testPath);
-            if (testFileInfo.exists && testFileInfo.size > 100) {
+            const { File } = require('expo-file-system');
+            const testFile = new File(testPath);
+            if (testFile.exists && testFile.size > 100) {
               console.log('[FFmpeg] 1s extract test PASSED — hasAudio=true (overriding text parse)');
               hasAudioFromText = true;
             } else {
@@ -268,9 +268,9 @@ export class FFmpegService {
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
     try {
-      const FileSystem = require('expo-file-system');
-      const videoFileInfo = await FileSystem.getInfoAsync(videoPath);
-      if (!videoFileInfo.exists) {
+      const { File } = require('expo-file-system');
+      const videoFile = new File(ensureAbsolute(videoPath));
+      if (!videoFile.exists) {
         throw new Error(`Input file NOT FOUND: ${videoPath}`);
       }
     } catch (e) {
@@ -581,11 +581,11 @@ export class FFmpegService {
         const isAss = config.srtPath.toLowerCase().endsWith('.ass');
         // stripFileProtocol ile file:// prefix'ini kaldır
         const rawSubPath = stripFileProtocol(ensureAbsolute(config.srtPath));
-        const FileSystem = require('expo-file-system');
+        const { File } = require('expo-file-system');
         const uriForCheck = rawSubPath.startsWith('/') ? `file://${rawSubPath}` : `file:///${rawSubPath}`;
-        const subFileInfo = await FileSystem.getInfoAsync(uriForCheck);
+        const subFile = new File(uriForCheck);
 
-        if (subFileInfo.exists) {
+        if (subFile.exists) {
           vIdx++;
           if (isAss) {
             const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
@@ -665,10 +665,11 @@ export class FFmpegService {
     let filterComplexArg: string[];
     let fcScriptPath: string | null = null;
     try {
-      const FileSystem = require('expo-file-system');
+      const { File } = require('expo-file-system');
       const scriptUri = getPath(Paths.cache, `fc_${Date.now()}.txt`);
+      const fcFile = new File(scriptUri);
+      fcFile.write(filterComplex);
       fcScriptPath = stripFileProtocol(scriptUri);
-      await FileSystem.writeAsStringAsync(scriptUri, filterComplex, { encoding: FileSystem.EncodingType.UTF8 });
       filterComplexArg = ['-filter_complex_script', fcScriptPath];
       console.log('[FFmpeg] Using filter_complex_script:', fcScriptPath);
     } catch (e) {
@@ -717,7 +718,7 @@ export class FFmpegService {
       console.log(`[FFmpeg] Output: ${rawOutputPath}`);
       // Temp filter_complex script dosyasını temizle
       if (fcScriptPath) {
-        try { const FileSystem = require('expo-file-system'); const uriToDelete = fcScriptPath.startsWith('/') ? `file://${fcScriptPath}` : `file:///${fcScriptPath}`; await FileSystem.deleteAsync(uriToDelete, { idempotent: true }); } catch {}
+        try { const { File } = require('expo-file-system'); const uri = fcScriptPath.startsWith('/') ? `file://${fcScriptPath}` : `file:///${fcScriptPath}`; new File(uri).delete(); } catch {}
       }
       return outputPath;
     } else {

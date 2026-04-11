@@ -1,0 +1,1 @@
+[0:v]ass='c\:/Users/User/Desktop/blitzz/__tests__/test_subtitles.ass'[v1];[v1]format=yuv420p[vout]
