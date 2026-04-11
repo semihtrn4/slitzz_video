@@ -130,11 +130,11 @@ export class FFmpegService {
           '-show_format',
           absVideoPath
         ]);
+        const probeOutput = await probeSession.getOutput();
         const probeLogs = await probeSession.getLogs();
-        const probeOutput = probeLogs.map((l: Log) => l.getMessage()).join('');
 
-        if (probeOutput && probeOutput.includes('"codec_type"')) {
-          console.log('[FFmpeg] Using FFprobeKit JSON output');
+        if (probeOutput && probeOutput.trim().startsWith('{')) {
+          console.log('[FFmpeg] Found FFprobeKit JSON output. Length:', probeOutput.length);
           const parsed = JSON.parse(probeOutput);
           const streams = parsed.streams || [];
           const format = parsed.format || {};
@@ -160,6 +160,8 @@ export class FFmpegService {
 
           console.log(`[FFprobeKit] hasAudio: ${hasAudio}, hasVideo: ${hasVideo}, duration: ${duration}`);
           return { duration, width: w, height: h, fps: fps || 30, hasAudio, hasVideo, rawOutput: probeOutput };
+        } else {
+          console.warn('[FFmpeg] FFprobeKit output invalid or empty. Logs:', probeLogs.map((l: Log) => l.getMessage()).join('\n'));
         }
       }
     } catch (probeErr) {
@@ -183,13 +185,14 @@ export class FFmpegService {
 
     // Her ikisini birleştir
     const combinedOutput = infoOutput + '\n' + FFmpegService.lastGlobalLogs.join('\n');
-    console.log('[FFmpeg] probe combined output (800 chars):', combinedOutput.substring(0, 800));
+    console.log('[FFmpeg] probe combined output (1000 chars):', combinedOutput.substring(0, 1000));
 
+    // Regexleri daha esnek hale getir (satır başı/sonu bağımlılığını azalt)
     let hasAudioFromText =
-      /Stream\s+#\d+:\d+[^:]*:\s*Audio:/i.test(combinedOutput);
+      /Audio:\s*(aac|mp3|ac3|pcm|opus)/i.test(combinedOutput) || combinedOutput.includes('Audio:');
 
     const hasVideoFromText =
-      /Stream\s+#\d+:\d+[^:]*:\s*Video:/i.test(combinedOutput);
+      /Video:\s*(h264|hevc|vp9|av1|mpeg|h263)/i.test(combinedOutput) || combinedOutput.includes('Video:');
 
     const durationMatch = combinedOutput.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d+)/);
     let duration = 0;
@@ -520,11 +523,11 @@ export class FFmpegService {
     let aIdx = 0;
 
     // ── 1. VİDEO KAYNAĞI ────────────────────────────────────────────────────
+    // KRİTİK FALLBACK: hasVideo false olsa bile videoyu zorla kullanmaya çalış (Siyah ekran yerine)
     if (!hasVideo) {
-      fc.push(`color=c=black:s=${width}x${height}:r=30:d=${preciseDuration.toFixed(3)}[v${vIdx}]`);
+      console.warn('[Export] hasVideo is FALSE but trying to use input[0] as video anyway (Safety Fallback)');
+      fc.push(`[${videoIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:0:0,setsar=1[v${vIdx}]`);
     } else {
-      // (ow-iw)/2 expression'ı kroog-ffmpeg-kit'te "error splitting argument list" yapıyor
-      // Sabit 0 offset kullan — scale zaten aspect ratio'yu koruyor, pad merkeze alır
       fc.push(`[${videoIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:0:0,setsar=1[v${vIdx}]`);
     }
     vStream = `[v${vIdx}]`;
@@ -684,7 +687,7 @@ export class FFmpegService {
       '-map', vStream,
       '-map', '[outa]',
       '-c:v', 'libx264',
-      '-preset', 'fast',
+      // '-preset', 'fast', // Bazı kısıtlı FFmpeg buildlerinde hata veriyor, kaldırıldı.
       '-b:v', is4K ? '10M' : '5M',
       '-c:a', 'aac',
       '-b:a', '128k',
@@ -710,7 +713,8 @@ export class FFmpegService {
     const session = await FFmpegKit.executeWithArguments(args);
     const returnCode = await session.getReturnCode();
 
-    FFmpegKitConfig.enableStatisticsCallback(null as any);
+    // Statistics callback crash fix: null yerine boş fonksiyon
+    FFmpegKitConfig.enableStatisticsCallback(() => {});
 
     if (ReturnCode.isSuccess(returnCode)) {
       onProgress?.(1, 'Complete');
