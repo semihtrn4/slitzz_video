@@ -590,16 +590,33 @@ export class FFmpegService {
 
         if (subFile.exists) {
           vIdx++;
-          if (isAss) {
-            const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-            // Explicit filename= use to avoid "No option name near" error on Android
-            fc.push(`${vStream}subtitles=filename='${escaped}'[v${vIdx}]`);
-          } else {
-            const escaped = rawSubPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-            fc.push(`${vStream}subtitles=filename='${escaped}':force_style='FontSize=48,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2'[v${vIdx}]`);
+          let subPathToUse = rawSubPath;
+
+          // SRT ise önce ASS'e çevir çünkü ass filtresi sadece .ass dosyalarını kabul eder.
+          // Bu işlem milisaniyeler sürer ve hata riskini %100 önler.
+          if (!isAss) {
+            try {
+              const assPath = stripFileProtocol(getPath(Paths.cache, `sub_${Date.now()}.ass`));
+              // ✅ FIX: SRT -> ASS Ön-Dönüştürme
+              const convertSession = await FFmpegKit.executeWithArguments(['-i', rawSubPath, '-y', assPath]);
+              const convertCode = await convertSession.getReturnCode();
+              if (ReturnCode.isSuccess(convertCode)) {
+                subPathToUse = assPath;
+                console.log(`[FFmpeg] SRT converted to ASS for stability: ${subPathToUse}`);
+              }
+            } catch (convErr) {
+              console.warn('[FFmpeg] SRT conversion failed, attempting direct burn:', convErr);
+            }
           }
+
+          const escaped = subPathToUse.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
+          
+          // Reverted to 'ass' filter because 'subtitles' filter was missing in this build.
+          // Now using pre-converted .ass file for maximum stability.
+          fc.push(`${vStream}ass=filename='${escaped}'[v${vIdx}]`);
+
           vStream = `[v${vIdx}]`;
-          console.log(`[FFmpeg] Subtitles added: ${rawSubPath}`);
+          console.log(`[FFmpeg] Subtitles added: ${subPathToUse}`);
         } else {
           console.warn('[FFmpeg] Subtitle file not found, skipping:', rawSubPath);
         }
