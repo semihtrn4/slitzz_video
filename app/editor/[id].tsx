@@ -18,7 +18,7 @@ import { ChevronLeft, Upload, Lock as LockIcon, Check } from 'lucide-react-nativ
 
 import { Colors } from '@/src/constants/colors';
 import { SUBTITLE_PRESETS, LANGUAGES, SPEED_OPTIONS, ASPECT_RATIOS, BACKGROUND_TRACKS } from '@/src/constants/subtitleStyles';
-import { PLATFORM_PRESETS, RESOLUTION_OPTIONS } from '@/src/constants/exportPresets';
+import { PLATFORM_PRESETS } from '@/src/constants/exportPresets';
 import { useProjectStore } from '@/src/stores/projectStore';
 import { useEditorStore } from '@/src/stores/editorStore';
 import { useSubscriptionStore } from '@/src/stores/subscriptionStore';
@@ -634,35 +634,7 @@ export default function EditorScreen() {
             <View style={styles.exportSheetHandle} />
             <Text style={styles.exportSheetTitle}>Export Video</Text>
             
-            <Text style={styles.exportSectionTitle}>Platform</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.platformList}>
-              {PLATFORM_PRESETS.map((preset) => (
-                <TouchableOpacity key={preset.name} style={styles.platformItem}>
-                  <Text style={styles.platformName}>{preset.name}</Text>
-                  <Text style={styles.platformDesc}>{preset.description}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
 
-            <Text style={styles.exportSectionTitle}>Quality</Text>
-            <View style={styles.qualityList}>
-              {RESOLUTION_OPTIONS.map((res) => (
-                <TouchableOpacity
-                  key={res.value}
-                  style={styles.qualityItem}
-                  onPress={() => {
-                    if (res.premium && !isPremium) {
-                      router.push('/paywall');
-                    }
-                  }}
-                >
-                  <Text style={styles.qualityLabel}>{res.label}</Text>
-                  {res.premium && !isPremium && (
-                    <LockIcon size={16} color={textSecondary} />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
 
             <Button
               title="Save to Gallery"

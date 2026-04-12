@@ -36,8 +36,6 @@ import { useSubscriptionStore } from '@/src/stores/subscriptionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { transcriptionService } from '@/src/services/transcriptionService';
 import { ffmpegService } from '@/src/services/ffmpegService';
-import { RESOLUTION_OPTIONS } from '@/src/constants/exportPresets';
-import { ASPECT_RATIOS } from '@/src/constants/subtitleStyles';
 import type { Resolution, AspectRatio } from '@/src/types';
 
 const { background, surface, surfaceElevated, primary, textPrimary, textSecondary, border, danger, success } = Colors;
@@ -49,7 +47,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { isPremium, togglePremium, debugProMode, toggleDebugProMode, isUserPremium } = useSubscriptionStore();
   const hasPremium = isUserPremium();
-  const { hapticEnabled, setHapticEnabled, autoDownloadModel, setAutoDownloadModel, defaultResolution, setDefaultResolution, defaultAspectRatio, setDefaultAspectRatio } = useSettingsStore();
+  const { hapticEnabled, setHapticEnabled } = useSettingsStore();
 
   const [storageUsed, setStorageUsed] = useState(0);
   const [storageTotal] = useState(512);
@@ -164,100 +162,9 @@ export default function SettingsScreen() {
         <Text style={styles.headerTitle}>Settings</Text>
       </View>
 
-      {/* Profile Section */}
-      <Animated.View entering={FadeIn.delay(100)} style={styles.profileSection}>
-        <View style={styles.profileCard}>
-          <View style={styles.avatarContainer}>
-            <User size={32} color={primary} />
-          </View>
-          <View style={styles.profileInfo}>
-            <Text style={styles.profileName}>BlitzCut User</Text>
-            <View style={[styles.planBadge, isPremium && styles.planBadgePremium]}>
-              <Crown size={12} color={isPremium ? '#FFFFFF' : primary} />
-              <Text style={[styles.planText, isPremium && styles.planTextPremium]}>
-                {hasPremium ? 'Premium' : 'Free Plan'}
-              </Text>
-            </View>
-          </View>
-          {!hasPremium && (
-            <TouchableOpacity style={styles.upgradeButton} onPress={handleUpgrade}>
-              <Text style={styles.upgradeButtonText}>Upgrade</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </Animated.View>
 
-      {/* Export Settings */}
-      <Animated.View entering={FadeIn.delay(200)} style={styles.section}>
-        <Text style={styles.sectionTitle}>Export Settings</Text>
-        
-        <View style={styles.card}>
-          <View style={styles.row}>
-            <Monitor size={20} color={textSecondary} />
-            <Text style={styles.rowLabel}>Default Resolution</Text>
-            <View style={styles.pickerContainer}>
-              {RESOLUTION_OPTIONS.map((res) => (
-                <TouchableOpacity
-                  key={res.value}
-                  style={[
-                    styles.pickerItem,
-                    defaultResolution === res.value && styles.pickerItemActive,
-                    res.premium && !hasPremium && styles.pickerItemLocked,
-                  ]}
-                  onPress={() => {
-                    if (res.premium && !hasPremium) {
-                      handleUpgrade();
-                    } else {
-                      setDefaultResolution(res.value);
-                    }
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.pickerItemText,
-                      defaultResolution === res.value && styles.pickerItemTextActive,
-                      res.premium && !hasPremium && styles.pickerItemTextLocked,
-                    ]}
-                  >
-                    {res.label}
-                  </Text>
-                  {res.premium && !hasPremium && (
-                    <Crown size={12} color={textSecondary} />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
 
-          <View style={styles.divider} />
 
-          <View style={styles.row}>
-            <Monitor size={20} color={textSecondary} />
-            <Text style={styles.rowLabel}>Default Aspect Ratio</Text>
-            <View style={styles.aspectPicker}>
-              {ASPECT_RATIOS.map((ratio: typeof ASPECT_RATIOS[0]) => (
-                <TouchableOpacity
-                  key={ratio.value}
-                  style={[
-                    styles.aspectItem,
-                    defaultAspectRatio === ratio.value && styles.aspectItemActive,
-                  ]}
-                  onPress={() => setDefaultAspectRatio(ratio.value)}
-                >
-                  <Text
-                    style={[
-                      styles.aspectItemText,
-                      defaultAspectRatio === ratio.value && styles.aspectItemTextActive,
-                    ]}
-                  >
-                    {ratio.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        </View>
-      </Animated.View>
 
       {/* AI Settings */}
       <Animated.View entering={FadeIn.delay(300)} style={styles.section}>
@@ -293,20 +200,7 @@ export default function SettingsScreen() {
             </View>
           )}
 
-          <View style={styles.divider} />
 
-          <View style={styles.switchRow}>
-            <View style={styles.switchRowLeft}>
-              <Sparkles size={20} color={textSecondary} />
-              <Text style={styles.rowLabel}>Auto-download Whisper Model</Text>
-            </View>
-            <Switch
-              value={autoDownloadModel}
-              onValueChange={setAutoDownloadModel}
-              trackColor={{ false: border, true: `${primary}50` }}
-              thumbColor={autoDownloadModel ? primary : textSecondary}
-            />
-          </View>
         </View>
       </Animated.View>
 

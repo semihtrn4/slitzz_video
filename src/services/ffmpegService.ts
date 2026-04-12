@@ -1,6 +1,6 @@
 // @ts-ignore
 import { FFmpegKit, FFprobeKit, ReturnCode, FFmpegKitConfig, Log, Statistics } from 'ffmpeg-kit-react-native';
-import { Directory, Paths } from 'expo-file-system';
+import { Directory, Paths, readAsStringAsync } from 'expo-file-system';
 import { silenceService } from './silenceService';
 import { getPath, ensureAbsolute, stripFileProtocol } from '../utils/pathUtils';
 import type { SilenceSegment, TimeSegment, ExportConfig } from '../types';
@@ -585,7 +585,8 @@ export class FFmpegService {
         const subFile = new File(uriForCheck);
 
         if (subFile.exists) {
-          const content = subFile.text() as string;
+          // ✅ FIX: text() yerine expo-file-system'in standart async okuma metodunu kullanıyoruz
+          const content = await readAsStringAsync(uriForCheck);
           // ASS içeriğini drawtext komutlarına çevir (libass bağımlılığını bitirir)
           const subLines = this.parseAssToDrawtext(content);
 
