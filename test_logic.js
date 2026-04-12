@@ -86,7 +86,7 @@ function generateFFmpegCommand() {
         "-filter_complex", filterComplex,
         "-map", vStream,
         "-map", "[outa]",
-        "-c:v", "libx264",
+        "-c:v", "mpeg4",
         "-c:a", "aac",
         "-b:a", "128k",
         "-movflags", "+faststart",

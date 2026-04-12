@@ -392,7 +392,7 @@ export class FFmpegService {
         '-filter_complex', filter,
         '-map', '[vout]',
         '-map', '[aout]',
-        '-c:v', 'libx264',
+        '-c:v', 'mpeg4',
         '-c:a', 'aac',
         '-y', rawOutputPath
       ]);
@@ -412,7 +412,7 @@ export class FFmpegService {
         '-i', absVideoPath,
         '-filter_complex', filter,
         '-map', '[vout]',
-        '-c:v', 'libx264',
+        '-c:v', 'mpeg4',
         '-an',
         '-y', rawOutputPath
       ]);
@@ -694,7 +694,7 @@ export class FFmpegService {
       ...filterComplexArg,
       '-map', vStream,
       '-map', '[outa]',
-      '-c:v', 'libx264',
+      '-c:v', 'mpeg4',
       // '-preset', 'fast', // Bazı kısıtlı FFmpeg buildlerinde hata veriyor, kaldırıldı.
       '-b:v', is4K ? '10M' : '5M',
       '-c:a', 'aac',
