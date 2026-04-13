@@ -87,7 +87,6 @@ export class FFmpegService {
     }
   }
 
-  // ─── Dosyayı yeni expo-file-system File API ile oku ──────────────────────
   private async readFileAsString(absolutePath: string): Promise<string> {
     const uri = absolutePath.startsWith('file://') ? absolutePath : `file://${absolutePath}`;
     const file = new File(uri);
@@ -98,8 +97,7 @@ export class FFmpegService {
     return content;
   }
 
-  // ─── Android sistem font path'ini bul ────────────────────────────────────
-  private async getSystemFontPath(): Promise<string | null> {
+  private async getSystemFontPath(): Promise<string> {
     const candidates = [
       '/system/fonts/Roboto-Regular.ttf',
       '/system/fonts/DroidSans.ttf',
@@ -120,8 +118,7 @@ export class FFmpegService {
       }
     }
 
-    console.warn('[FFmpeg] No system font found, drawtext will use default (may fail)');
-    return null;
+    throw new Error('System font not found. Cannot render text.');
   }
 
   async getVideoInfo(videoPath: string): Promise<{
@@ -136,7 +133,6 @@ export class FFmpegService {
     await this.ensureLogCallback();
     const absVideoPath = stripFileProtocol(ensureAbsolute(videoPath));
 
-    // ── AŞAMA 1: FFprobeKit JSON ─────────────────────────────────────────────
     try {
       if (typeof FFprobeKit !== 'undefined' && FFprobeKit !== null) {
         const probeSession = await FFprobeKit.executeWithArguments([
@@ -184,7 +180,6 @@ export class FFmpegService {
       console.warn('[FFmpeg] FFprobeKit failed or unavailable, falling back to FFmpeg -i:', probeErr);
     }
 
-    // ── AŞAMA 2: FFmpeg -i metin parse ──────────────────────────────────────
     FFmpegService.lastGlobalLogs = [];
 
     const infoSession = await FFmpegKit.executeWithArguments(['-hide_banner', '-i', absVideoPath]);
@@ -224,7 +219,6 @@ export class FFmpegService {
 
     console.log(`[FFmpeg -i] hasAudio (text): ${hasAudioFromText}, hasVideo: ${hasVideoFromText}`);
 
-    // ── AŞAMA 3: Ses algılanamadıysa 1 saniyelik extract testi ──────────────
     if (!hasAudioFromText) {
       console.log('[FFmpeg] Audio not detected in text, running 1s extract test...');
       try {
@@ -470,9 +464,7 @@ export class FFmpegService {
     console.log('=== [EXPORT START] ===');
     console.log(`[Export] hasAudio: ${hasAudio}, hasVideo: ${hasVideo}, duration: ${info.duration}`);
     console.log(`[Export] videoPath: ${rawInputPath}`);
-    console.log(`[Export] config: trimStart=${config.trimStart}, trimEnd=${config.trimEnd}, speed=${config.speed}, resolution=${config.resolution}, aspectRatio=${config.aspectRatio}`);
-    console.log(`[Export] musicPath: ${config.musicPath || 'none'}, audioVolume: ${config.audioVolume}, includeSubtitles: ${config.includeSubtitles}`);
-
+    
     const preciseDuration = config.trimEnd
       ? config.trimEnd - (config.trimStart || 0)
       : (info.duration > 0 ? info.duration : 60);
@@ -511,11 +503,11 @@ export class FFmpegService {
     let vIdx = 0;
     let aIdx = 0;
 
-    // ── 1. VİDEO KAYNAĞI ────────────────────────────────────────────────────
+    // 1. VİDEO KAYNAĞI
     fc.push(`[${videoIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:0:0,setsar=1[v${vIdx}]`);
     vStream = `[v${vIdx}]`;
 
-    // ── 2. SES KAYNAĞI ──────────────────────────────────────────────────────
+    // 2. SES KAYNAĞI
     if (hasAudio) {
       fc.push(`[${videoIdx}:a]asetpts=PTS-STARTPTS[a${aIdx}]`);
     } else {
@@ -524,7 +516,7 @@ export class FFmpegService {
     }
     aStream = `[a${aIdx}]`;
 
-    // ── 3. TRIM ─────────────────────────────────────────────────────────────
+    // 3. TRIM
     if (config.trimStart !== undefined || config.trimEnd !== undefined) {
       const start = (config.trimStart || 0).toFixed(3);
       const end = (config.trimEnd || 999999).toFixed(3);
@@ -540,7 +532,7 @@ export class FFmpegService {
       }
     }
 
-    // ── 4. SPEED ────────────────────────────────────────────────────────────
+    // 4. SPEED
     if (config.speed && config.speed !== 1) {
       vIdx++;
       fc.push(`${vStream}setpts=${(1 / config.speed).toFixed(6)}*PTS[v${vIdx}]`);
@@ -557,13 +549,20 @@ export class FFmpegService {
       aStream = `[a${aIdx}]`;
     }
 
-    // ── 5. SUBTITLES (DRAWTEXT) — FONT FIX ──────────────────────────────────
-    if (config.srtPath && config.includeSubtitles) {
+    // 5. FONT VE SUBTITLE (DRAWTEXT)
+    let fontFilePath: string | null = null;
+    try {
+       fontFilePath = await this.getSystemFontPath();
+       console.log('[FFmpeg] Font path resolved for drawtext:', fontFilePath);
+    } catch (e) {
+       console.warn('[FFmpeg] CRITICAL: Font not found, subtitles will fail!', e);
+    }
+
+    if (config.srtPath && config.includeSubtitles && fontFilePath) {
       try {
         const absSubPath = stripFileProtocol(ensureAbsolute(config.srtPath));
         const content = await this.readFileAsString(absSubPath);
 
-        // SRT mi ASS mi otomatik algıla
         const subLines = (absSubPath.endsWith('.srt') || content.includes('-->'))
           ? this.parseSrtToDrawtext(content)
           : this.parseAssToDrawtext(content);
@@ -571,30 +570,27 @@ export class FFmpegService {
         console.log(`[FFmpeg] Parsed subtitle lines: ${subLines.length}`);
 
         if (subLines.length > 0) {
-          // Android sistem font path'ini bul — drawtext için kritik
-          const fontPath = await this.getSystemFontPath();
-          const fontPart = fontPath ? `:fontfile='${fontPath}'` : '';
+          const fontParam = `:fontfile='${fontFilePath}'`;
 
           vIdx++;
           const drawtextFilters = subLines
             .map(l => {
-              // Tüm özel karakterleri temizle — FFmpeg filter parser'ını kırar
               const safeText = l.text
-                .replace(/\\/g, '')     // backslash kaldır
-                .replace(/'/g, '')      // tek tırnak kaldır
-                .replace(/"/g, '')      // çift tırnak kaldır
-                .replace(/,/g, ' ')     // virgül → boşluk (filtre ayırıcı)
-                .replace(/:/g, ' ')     // iki nokta → boşluk (opsiyon ayırıcı)
-                .replace(/\[/g, '')     // köşeli parantez kaldır
+                .replace(/\\/g, '')
+                .replace(/'/g, '')
+                .replace(/"/g, '')
+                .replace(/,/g, ' ')
+                .replace(/:/g, ' ')
+                .replace(/\[/g, '')
                 .replace(/\]/g, '')
-                .replace(/\{/g, '')     // süslü parantez kaldır
+                .replace(/\{/g, '')
                 .replace(/\}/g, '')
                 .trim();
 
               if (!safeText) return null;
 
               return `drawtext=text='${safeText}'` +
-                     `${fontPart}` +
+                     `${fontParam}` + 
                      `:x=(w-text_w)/2:y=h-th-100` +
                      `:fontsize=42:fontcolor=white:borderw=3:bordercolor=black` +
                      `:enable='between(t\\,${l.start.toFixed(3)}\\,${l.end.toFixed(3)})'`;
@@ -607,27 +603,23 @@ export class FFmpegService {
             vStream = `[v${vIdx}]`;
             console.log(`[FFmpeg] Subtitles applied via drawtext: ${subLines.length} lines`);
           } else {
-            // Filter boş geldi, vIdx'i geri al
-            vIdx--;
-            console.warn('[FFmpeg] All subtitle lines were empty after sanitization, skipping.');
+             vIdx--; 
           }
-        } else {
-          console.warn('[FFmpeg] Subtitle file parsed but no lines found.');
         }
       } catch (e) {
         console.warn('[FFmpeg] Drawtext subtitles failed, skipping:', e);
-        // Subtitle hatası export'u engellemesin
       }
     }
 
-    // ── 6. WATERMARK ────────────────────────────────────────────────────────
-    if (!isPremium && config.watermark) {
+    // 6. WATERMARK
+    if (!isPremium && config.watermark && fontFilePath) {
       vIdx++;
-      fc.push(`${vStream}drawtext=text='Made_with_SlitzCut':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.6[v${vIdx}]`);
+      const fontParam = `:fontfile='${fontFilePath}'`;
+      fc.push(`${vStream}drawtext=text='Made_with_SlitzCut'${fontParam}:x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.6[v${vIdx}]`);
       vStream = `[v${vIdx}]`;
     }
 
-    // ── 7. SES VOLUME + FADE + MÜZİK MİX ───────────────────────────────────
+    // 7. SES VOLUME + FADE + MÜZİK MİX
     const volVal = Math.max(0, Math.min(2, (config.audioVolume ?? 100) / 100));
     const finalVol = volVal.toFixed(4);
     const audioFilters: string[] = [`volume=${finalVol}`];
@@ -659,12 +651,8 @@ export class FFmpegService {
     const filterComplex = fc.join(';');
 
     console.log('[FFmpeg] === FILTER COMPLEX STEPS ===');
-    fc.forEach((step, i) => console.log(`[FFmpeg] fc[${i}]: ${step}`));
-    console.log('[FFmpeg] === FULL filter_complex ===');
-    console.log('[FFmpeg]', filterComplex);
-    console.log(`[FFmpeg] vStream final: ${vStream}, aStream final: ${aStream}`);
+    fc.forEach((step, i) => console.log(`[FFmpeg] fc[${i}]: ${step.substring(0, 150)}...`));
 
-    // ─── filter_complex SCRIPT DOSYASI ──────────────────────────────────────
     let filterComplexArg: string[];
     let fcScriptPath: string | null = null;
     try {
@@ -727,7 +715,7 @@ export class FFmpegService {
       sessionLogs.forEach((l: any, i: number) => {
         const msg = l.getMessage();
         if (msg.includes('Error') || msg.includes('error') || msg.includes('Invalid') ||
-          msg.includes('No such') || msg.includes('failed') || msg.includes('matches no')) {
+          msg.includes('No such') || msg.includes('failed') || msg.includes('matches no') || msg.includes('Cannot find')) {
           console.error(`[FFmpeg] !! HATA SATIRI [${i}]: ${msg}`);
         } else {
           console.log(`[FFmpeg] log[${i}]: ${msg}`);
@@ -787,18 +775,14 @@ export class FFmpegService {
     }
   }
 
-  // ─── SRT formatını parse et → drawtext satırları ─────────────────────────
   private parseSrtToDrawtext(srtContent: string): { start: number; end: number; text: string }[] {
     const results: { start: number; end: number; text: string }[] = [];
-
-    // SRT bloklarını boş satırla ayır
     const blocks = srtContent.trim().split(/\n\s*\n/);
 
     for (const block of blocks) {
       const lines = block.trim().split('\n');
       if (lines.length < 2) continue;
 
-      // Zaman damgası satırını bul: "00:00:01,000 --> 00:00:03,000"
       const timeLine = lines.find(l => l.includes('-->'));
       if (!timeLine) continue;
 
@@ -813,10 +797,9 @@ export class FFmpegService {
       const start = toSec(timeMatch[1], timeMatch[2], timeMatch[3], timeMatch[4]);
       const end   = toSec(timeMatch[5], timeMatch[6], timeMatch[7], timeMatch[8]);
 
-      // Zaman satırından sonraki satırlar text
       const timeLineIdx = lines.indexOf(timeLine);
       const textLines = lines.slice(timeLineIdx + 1)
-        .map(l => l.replace(/<[^>]*>/g, '').trim()) // HTML tag temizle
+        .map(l => l.replace(/<[^>]*>/g, '').trim())
         .filter(l => l.length > 0);
 
       const text = textLines.join(' ').trim();
@@ -826,7 +809,6 @@ export class FFmpegService {
     return results;
   }
 
-  // ─── ASS formatını parse et → drawtext satırları ─────────────────────────
   private parseAssToDrawtext(assContent: string): { start: number; end: number; text: string }[] {
     const results: { start: number; end: number; text: string }[] = [];
     const lines = assContent.split('\n');
@@ -843,7 +825,6 @@ export class FFmpegService {
       const start = toSec(match[1], match[2], match[3], match[4]);
       const end   = toSec(match[5], match[6], match[7], match[8]);
 
-      // ASS tag'lerini temizle: {\an8} ve satır sonu \N
       const text = match[9]
         .replace(/\{[^}]*\}/g, '')
         .replace(/\\N/g, ' ')
